@@ -13,12 +13,25 @@ export function sessionOnDate(state: AppState, dayId: string, date = new Date())
   );
 }
 
-export function sessionsThisWeek(state: AppState, date = new Date()) {
+export function startOfMonday(date = new Date()) {
   const day = date.getDay();
   const mondayOffset = day === 0 ? -6 : 1 - day;
   const monday = new Date(date);
   monday.setDate(date.getDate() + mondayOffset);
   monday.setHours(0, 0, 0, 0);
+  return monday;
+}
+
+export function dateForWeekday(weekday: number, date = new Date()) {
+  const monday = startOfMonday(date);
+  const offset = weekday === 0 ? 6 : weekday - 1;
+  const result = new Date(monday);
+  result.setDate(monday.getDate() + offset);
+  return result;
+}
+
+export function sessionsThisWeek(state: AppState, date = new Date()) {
+  const monday = startOfMonday(date);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 7);
   return state.sessions.filter((s) => {
@@ -35,14 +48,46 @@ export function weekGrid(state: AppState) {
 }
 
 export function markSession(
-  state: AppState,
   dayId: string,
-  rpe: number
+  rpe: number,
+  date = new Date(),
+  exercisesDone?: string[]
 ): CompletedSession {
   return {
     id: crypto.randomUUID(),
-    date: new Date().toISOString(),
+    date: isoDate(date),
     dayId,
     rpe,
+    exercisesDone,
   };
+}
+
+export function upsertSession(
+  state: AppState,
+  dayId: string,
+  date: Date,
+  patch: { rpe?: number; exercisesDone?: string[] }
+): CompletedSession[] {
+  const existing = sessionOnDate(state, dayId, date);
+  if (existing) {
+    return state.sessions.map((session) =>
+      session.id === existing.id
+        ? {
+            ...session,
+            rpe: patch.rpe ?? session.rpe,
+            exercisesDone: patch.exercisesDone ?? session.exercisesDone,
+          }
+        : session
+    );
+  }
+  return [
+    ...state.sessions,
+    markSession(dayId, patch.rpe ?? 7, date, patch.exercisesDone),
+  ];
+}
+
+export function removeSession(state: AppState, dayId: string, date: Date) {
+  const existing = sessionOnDate(state, dayId, date);
+  if (!existing) return state.sessions;
+  return state.sessions.filter((session) => session.id !== existing.id);
 }

@@ -2,6 +2,7 @@ import type { WorkoutDay } from "@/lib/types";
 import { INTENSITY_LABEL } from "@/lib/labels";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ExerciseGuideDialog } from "@/components/exercise-guide-dialog";
 import { Separator } from "@/components/ui/separator";
 
 export function WorkoutDayCard({
@@ -32,17 +33,8 @@ export function WorkoutDayCard({
         </p>
         <ul className="divide-y">
           {day.exercises.map((ex) => (
-            <li key={ex.name} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:justify-between">
-              <div>
-                <p className="font-medium">{ex.name}</p>
-                {ex.notes && (
-                  <p className="text-sm text-muted-foreground">{ex.notes}</p>
-                )}
-              </div>
-              <p className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                {ex.sets} × {ex.reps}
-                {ex.restSec > 0 ? ` · ${ex.restSec}s` : ""}
-              </p>
+            <li key={ex.name}>
+              <ExerciseGuideDialog exercise={ex} />
             </li>
           ))}
         </ul>

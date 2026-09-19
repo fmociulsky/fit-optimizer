@@ -1,6 +1,7 @@
 import type {
   Equipment,
   Experience,
+  FocusArea,
   GoalType,
   Horizon,
   Intensity,
@@ -37,9 +38,15 @@ export const EXPERIENCE_HINT: Record<Experience, string> = {
 };
 
 export const EQUIPMENT_LABEL: Record<Equipment, string> = {
-  full_gym: "Gimnasio completo",
-  home_dumbbells: "Casa: mancuernas y poco más",
-  bodyweight: "Peso corporal / bandas",
+  full_gym: "Gimnasio",
+  home_dumbbells: "Casa",
+  bodyweight: "Casa, sin pesas",
+};
+
+export const EQUIPMENT_HINT: Record<Equipment, string> = {
+  full_gym: "Luego marcas las máquinas que hay de verdad",
+  home_dumbbells: "Luego marcas mancuernas, banco, bandas o lo que tengas",
+  bodyweight: "Luego marcas silla, colchoneta, bandas, pared…",
 };
 
 export const HORIZON_LABEL: Record<Horizon, string> = {
@@ -61,6 +68,41 @@ export const GOAL_LABEL: Record<GoalType, string> = {
   endurance: "Mejorar resistencia",
   health: "Salud y constancia",
 };
+
+export const FOCUS_AREA_LABEL: Record<FocusArea, string> = {
+  full_body: "Cuerpo completo",
+  legs: "Piernas",
+  glutes: "Glúteos",
+  chest: "Pecho",
+  back: "Espalda",
+  shoulders: "Hombros",
+  arms: "Brazos",
+  core: "Core",
+  cardio: "Cardio",
+};
+
+export const FOCUS_AREA_HINT: Record<FocusArea, string> = {
+  full_body: "Sin priorizar una zona: el plan reparte el trabajo",
+  legs: "Cuádriceps, isquios y trabajo de rodilla",
+  glutes: "Puente, hip thrust y bisagra de cadera",
+  chest: "Empujes horizontales",
+  back: "Remo y jalón",
+  shoulders: "Press vertical y deltoides",
+  arms: "Bíceps y tríceps",
+  core: "Plancha, antirotación y estabilidad",
+  cardio: "Cinta, bici o intervalos suaves",
+};
+
+export const FOCUS_ZONE_OPTIONS: Exclude<FocusArea, "full_body">[] = [
+  "legs",
+  "glutes",
+  "chest",
+  "back",
+  "shoulders",
+  "arms",
+  "core",
+  "cardio",
+];
 
 export const GOAL_HINT: Record<GoalType, string> = {
   fat_loss: "Mantener músculo mientras bajas peso con calma",

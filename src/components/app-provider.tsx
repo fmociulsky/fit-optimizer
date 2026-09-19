@@ -8,10 +8,23 @@ import {
   useSyncExternalStore,
 } from "react";
 import { applyCheckIn } from "@/lib/adjust";
+import { EQUIPMENT_LABEL, FOCUS_AREA_LABEL } from "@/lib/labels";
 import { generatePlan } from "@/lib/plan";
-import { markSession } from "@/lib/schedule";
+import { removeSession, sessionOnDate, upsertSession } from "@/lib/schedule";
+import { isoDate, withComputedAge } from "@/lib/metrics";
 import { clearState, loadState, saveState } from "@/lib/storage";
-import type { AppState, CheckIn, Goal, Profile } from "@/lib/types";
+import { buildWeeklyMenu } from "@/lib/weekly-menu";
+import type {
+  Adjustment,
+  AppState,
+  CheckIn,
+  FocusArea,
+  Goal,
+  MealSlot,
+  MindPrefs,
+  NutritionPrefs,
+  Profile,
+} from "@/lib/types";
 
 const listeners = new Set<() => void>();
 let cache: AppState | null | undefined;
@@ -49,12 +62,37 @@ function clientMountedSubscribe() {
   return () => {};
 }
 
+function zonesLabel(areas?: FocusArea[] | null) {
+  if (!areas?.length || areas.includes("full_body")) {
+    return FOCUS_AREA_LABEL.full_body;
+  }
+  return areas
+    .filter((area) => area !== "full_body")
+    .map((area) => FOCUS_AREA_LABEL[area])
+    .join(", ");
+}
+
 type Store = {
   ready: boolean;
   state: AppState | null;
   startPlan: (profile: Profile, goal: Goal) => AppState;
-  logSession: (dayId: string, rpe: number) => void;
+  rebuildPlan: (profile: Profile, goal: Goal) => AppState;
+  logSession: (dayId: string, rpe: number, date?: Date) => void;
+  unlogSession: (dayId: string, date?: Date) => void;
+  toggleExercise: (
+    dayId: string,
+    exerciseName: string,
+    allNames: string[],
+    date?: Date
+  ) => void;
   submitCheckIn: (input: Omit<CheckIn, "id" | "date">) => CheckIn;
+  acceptNutritionGuide: () => void;
+  acceptPlanGuide: () => void;
+  saveNutritionMenu: (prefs: NutritionPrefs) => void;
+  acceptMindGuide: () => void;
+  saveMindPrefs: (prefs: MindPrefs) => void;
+  logMindPractice: (practiceId: string) => void;
+  logMeal: (slot: MealSlot) => void;
   reset: () => void;
 };
 
@@ -70,23 +108,142 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const state = mounted ? stored : null;
 
   const startPlan = useCallback((profile: Profile, goal: Goal) => {
+    const nextProfile = withComputedAge(profile);
     const next: AppState = {
-      profile,
+      profile: nextProfile,
       goal,
-      plan: generatePlan(profile, goal),
+      plan: generatePlan(nextProfile, goal),
       checkIns: [],
       sessions: [],
+      planAcceptedAt: new Date().toISOString(),
     };
     write(next);
     return next;
   }, []);
 
-  const logSession = useCallback((dayId: string, rpe: number) => {
+  const rebuildPlan = useCallback((profile: Profile, goal: Goal) => {
+    const prev = getSnapshot();
+    if (!prev) return startPlan(profile, goal);
+    profile = withComputedAge(profile);
+
+    const previousMachines = prev.profile.gymMachines ?? [];
+    const nextMachines = profile.gymMachines ?? [];
+    const previousHome = prev.profile.homeItems ?? [];
+    const nextHome = profile.homeItems ?? [];
+    const changes: string[] = [];
+    if (prev.profile.equipment !== profile.equipment) {
+      changes.push(
+        `Material: de ${EQUIPMENT_LABEL[prev.profile.equipment]} a ${EQUIPMENT_LABEL[profile.equipment]}.`
+      );
+    }
+    if (
+      profile.equipment === "full_gym" &&
+      previousMachines.slice().sort().join() !== nextMachines.slice().sort().join()
+    ) {
+      changes.push(
+        `Máquinas del gimnasio: ${nextMachines.length} seleccionadas.`
+      );
+    }
+    if (
+      profile.equipment !== "full_gym" &&
+      previousHome.slice().sort().join() !== nextHome.slice().sort().join()
+    ) {
+      changes.push(
+        `Material de casa: ${nextHome.length} elementos seleccionados.`
+      );
+    }
+    if (prev.goal.type !== goal.type || prev.goal.horizon !== goal.horizon) {
+      changes.push("Objetivo u horizonte actualizados.");
+    }
+    const prevFocus = (prev.goal.focusAreas ?? ["full_body"]).slice().sort().join();
+    const nextFocus = (goal.focusAreas ?? ["full_body"]).slice().sort().join();
+    if (prevFocus !== nextFocus) {
+      changes.push(`Zonas: ${zonesLabel(goal.focusAreas)}.`);
+    }
+    if (!changes.length) {
+      changes.push("Plan rearmado con los datos actuales.");
+    }
+
+    const adjustment: Adjustment = {
+      id: crypto.randomUUID(),
+      date: new Date().toISOString(),
+      reason: "Reconfiguración del material y del contexto",
+      changes,
+    };
+    const plan = generatePlan(profile, goal, prev.plan);
+    plan.adjustments = [...prev.plan.adjustments, adjustment];
+
+    const next: AppState = {
+      profile,
+      goal,
+      plan,
+      checkIns: prev.checkIns,
+      sessions: prev.sessions,
+      nutritionAcceptedAt: prev.nutritionAcceptedAt,
+      planAcceptedAt: prev.planAcceptedAt ?? new Date().toISOString(),
+      nutritionPrefs: prev.nutritionPrefs,
+      weeklyMenu: prev.nutritionPrefs
+        ? buildWeeklyMenu({
+            profile,
+            goal,
+            plan,
+            prefs: prev.nutritionPrefs,
+            weightKg: prev.checkIns.at(-1)?.weightKg ?? profile.weightKg,
+          })
+        : undefined,
+      mindAcceptedAt: prev.mindAcceptedAt,
+      mindPrefs: prev.mindPrefs,
+      mindLogs: prev.mindLogs,
+      mealLogs: prev.mealLogs,
+    };
+    write(next);
+    return next;
+  }, [startPlan]);
+
+  const logSession = useCallback((dayId: string, rpe: number, date = new Date()) => {
     const prev = getSnapshot();
     if (!prev) return;
-    const session = markSession(prev, dayId, rpe);
-    write({ ...prev, sessions: [...prev.sessions, session] });
+    const workout = prev.plan.weeklySplit.find((day) => day.id === dayId);
+    const names = workout?.exercises.map((exercise) => exercise.name);
+    write({
+      ...prev,
+      sessions: upsertSession(prev, dayId, date, {
+        rpe,
+        exercisesDone: names,
+      }),
+    });
   }, []);
+
+  const unlogSession = useCallback((dayId: string, date = new Date()) => {
+    const prev = getSnapshot();
+    if (!prev) return;
+    write({ ...prev, sessions: removeSession(prev, dayId, date) });
+  }, []);
+
+  const toggleExercise = useCallback(
+    (dayId: string, exerciseName: string, allNames: string[], date = new Date()) => {
+      const prev = getSnapshot();
+      if (!prev) return;
+      const existing = sessionOnDate(prev, dayId, date);
+      const done = new Set(
+        existing?.exercisesDone ?? (existing ? allNames : [])
+      );
+      if (done.has(exerciseName)) done.delete(exerciseName);
+      else done.add(exerciseName);
+      if (done.size === 0) {
+        write({ ...prev, sessions: removeSession(prev, dayId, date) });
+        return;
+      }
+      write({
+        ...prev,
+        sessions: upsertSession(prev, dayId, date, {
+          rpe: existing?.rpe ?? 7,
+          exercisesDone: [...done],
+        }),
+      });
+    },
+    []
+  );
 
   const submitCheckIn = useCallback((input: Omit<CheckIn, "id" | "date">) => {
     const checkIn: CheckIn = {
@@ -106,6 +263,80 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return checkIn;
   }, []);
 
+  const acceptNutritionGuide = useCallback(() => {
+    const prev = getSnapshot();
+    if (!prev || prev.nutritionAcceptedAt) return;
+    write({ ...prev, nutritionAcceptedAt: new Date().toISOString() });
+  }, []);
+
+  const acceptPlanGuide = useCallback(() => {
+    const prev = getSnapshot();
+    if (!prev || prev.planAcceptedAt) return;
+    write({ ...prev, planAcceptedAt: new Date().toISOString() });
+  }, []);
+
+  const saveNutritionMenu = useCallback((prefs: NutritionPrefs) => {
+    const prev = getSnapshot();
+    if (!prev) return;
+    write({
+      ...prev,
+      nutritionPrefs: prefs,
+      weeklyMenu: buildWeeklyMenu({
+        profile: prev.profile,
+        goal: prev.goal,
+        plan: prev.plan,
+        prefs,
+        weightKg: prev.checkIns.at(-1)?.weightKg ?? prev.profile.weightKg,
+      }),
+    });
+  }, []);
+
+  const acceptMindGuide = useCallback(() => {
+    const prev = getSnapshot();
+    if (!prev || prev.mindAcceptedAt) return;
+    write({ ...prev, mindAcceptedAt: new Date().toISOString() });
+  }, []);
+
+  const saveMindPrefs = useCallback((prefs: MindPrefs) => {
+    const prev = getSnapshot();
+    if (!prev) return;
+    write({ ...prev, mindPrefs: prefs });
+  }, []);
+
+  const logMindPractice = useCallback((practiceId: string) => {
+    const prev = getSnapshot();
+    if (!prev) return;
+    const stamp = isoDate();
+    const already = (prev.mindLogs ?? []).some(
+      (log) => log.practiceId === practiceId && isoDate(new Date(log.date)) === stamp
+    );
+    if (already) return;
+    write({
+      ...prev,
+      mindLogs: [
+        ...(prev.mindLogs ?? []),
+        { id: crypto.randomUUID(), date: new Date().toISOString(), practiceId },
+      ],
+    });
+  }, []);
+
+  const logMeal = useCallback((slot: MealSlot) => {
+    const prev = getSnapshot();
+    if (!prev) return;
+    const stamp = isoDate();
+    const already = (prev.mealLogs ?? []).some(
+      (log) => log.slot === slot && isoDate(new Date(log.date)) === stamp
+    );
+    if (already) return;
+    write({
+      ...prev,
+      mealLogs: [
+        ...(prev.mealLogs ?? []),
+        { id: crypto.randomUUID(), date: new Date().toISOString(), slot },
+      ],
+    });
+  }, []);
+
   const reset = useCallback(() => {
     write(null);
   }, []);
@@ -115,11 +346,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ready: mounted,
       state,
       startPlan,
+      rebuildPlan,
       logSession,
+      unlogSession,
+      toggleExercise,
       submitCheckIn,
+      acceptNutritionGuide,
+      acceptPlanGuide,
+      saveNutritionMenu,
+      acceptMindGuide,
+      saveMindPrefs,
+      logMindPractice,
+      logMeal,
       reset,
     }),
-    [mounted, state, startPlan, logSession, submitCheckIn, reset]
+    [
+      mounted,
+      state,
+      startPlan,
+      rebuildPlan,
+      logSession,
+      unlogSession,
+      toggleExercise,
+      submitCheckIn,
+      acceptNutritionGuide,
+      acceptPlanGuide,
+      saveNutritionMenu,
+      acceptMindGuide,
+      saveMindPrefs,
+      logMindPractice,
+      logMeal,
+      reset,
+    ]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

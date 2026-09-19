@@ -1,3 +1,4 @@
+import { TYPICAL_GYM_MACHINE_IDS } from "./gym-machines";
 import type { AppState, Horizon, Profile } from "./types";
 
 export function calcBmi(weightKg: number, heightCm: number) {
@@ -24,6 +25,70 @@ export function ageBand(age: number) {
   if (age < 45) return "adult" as const;
   if (age < 60) return "mature" as const;
   return "senior" as const;
+}
+
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+export function toLocalYmd(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+export function parseLocalYmd(ymd?: string | null) {
+  if (!ymd) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+export function ageFromBirthDate(ymd: string, on = new Date()) {
+  const birth = parseLocalYmd(ymd);
+  if (!birth) return NaN;
+  let age = on.getFullYear() - birth.getFullYear();
+  const monthDiff = on.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && on.getDate() < birth.getDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
+export function birthDateFromAge(age: number, on = new Date()) {
+  return toLocalYmd(new Date(on.getFullYear() - age, on.getMonth(), on.getDate()));
+}
+
+export function profileAge(profile: Pick<Profile, "age" | "birthDate">, on = new Date()) {
+  if (profile.birthDate) {
+    const age = ageFromBirthDate(profile.birthDate, on);
+    if (Number.isFinite(age) && age >= 0) return age;
+  }
+  return profile.age;
+}
+
+export function withComputedAge(profile: Profile, on = new Date()): Profile {
+  const birthDate =
+    profile.birthDate && parseLocalYmd(profile.birthDate)
+      ? profile.birthDate
+      : birthDateFromAge(profile.age, on);
+  return { ...profile, birthDate, age: profileAge({ ...profile, birthDate }, on) };
+}
+
+export function birthDateBounds(on = new Date()) {
+  return {
+    min: toLocalYmd(new Date(on.getFullYear() - 85, on.getMonth(), on.getDate())),
+    max: toLocalYmd(new Date(on.getFullYear() - 16, on.getMonth(), on.getDate())),
+  };
 }
 
 export function daysElapsed(fromIso: string, to = new Date()) {
@@ -89,6 +154,7 @@ export function suggestedWeekdays(count: number) {
 export function defaultDraftProfile(): Profile {
   return {
     name: "",
+    birthDate: "",
     age: 32,
     sex: "female",
     weightKg: 70,
@@ -97,6 +163,7 @@ export function defaultDraftProfile(): Profile {
     medicalNotes: "",
     experience: "beginner",
     equipment: "full_gym",
+    gymMachines: [...TYPICAL_GYM_MACHINE_IDS],
     weekdays: [1, 3, 5],
     sessionMinutes: 45,
   };

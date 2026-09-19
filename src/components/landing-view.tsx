@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { ArrowRight, HeartPulse, Target, TimerReset } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
-import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { useAppStore } from "@/components/app-provider";
+import { cn } from "@/lib/utils";
 
 const STEPS = [
   {
@@ -44,18 +45,20 @@ export function LandingView() {
           reajustar, no para llenar una gráfica.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          <Button className="h-12 px-6 text-base" render={<Link href={hasPlan ? "/panel" : "/comenzar"} />}>
+          <Link
+            href={hasPlan ? "/panel" : "/comenzar"}
+            className={cn(buttonVariants(), "h-12 px-6 text-base")}
+          >
             {hasPlan ? "Seguir mi plan" : "Empezar mi plan"}
             <ArrowRight data-icon="inline-end" />
-          </Button>
+          </Link>
           {hasPlan && (
-            <Button
-              variant="outline"
-              className="h-12 px-6 text-base"
-              render={<Link href="/comenzar" />}
+            <Link
+              href="/comenzar"
+              className={cn(buttonVariants({ variant: "outline" }), "h-12 px-6 text-base")}
             >
               Armar uno nuevo
-            </Button>
+            </Link>
           )}
         </div>
 
@@ -75,9 +78,10 @@ export function LandingView() {
         </div>
 
         <p className="mt-16 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          Enforma no es un diagnóstico ni sustituye consejo médico. Si tienes
-          antecedentes cardíacos, lesión, embarazo o cualquier condición, habla
-          con un profesional de la salud antes de empezar.
+          Enforma es una guía orientativa. El plan de entrenamiento debe ir
+          asistido por un profesional de la salud o del ejercicio: no es un
+          diagnóstico ni una prescripción. Si tienes antecedentes cardíacos,
+          lesión, embarazo o cualquier condición, consulta antes de empezar.
         </p>
       </main>
     </div>

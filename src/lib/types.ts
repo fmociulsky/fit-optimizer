@@ -9,6 +9,16 @@ export type GoalType =
   | "health";
 export type Equipment = "full_gym" | "home_dumbbells" | "bodyweight";
 export type Intensity = "low" | "moderate" | "high";
+export type FocusArea =
+  | "full_body"
+  | "legs"
+  | "glutes"
+  | "chest"
+  | "back"
+  | "shoulders"
+  | "arms"
+  | "core"
+  | "cardio";
 
 export type MedicalFlag =
   | "none"
@@ -23,6 +33,7 @@ export type MedicalFlag =
 
 export interface Profile {
   name: string;
+  birthDate?: string;
   age: number;
   sex: Sex;
   weightKg: number;
@@ -31,6 +42,8 @@ export interface Profile {
   medicalNotes: string;
   experience: Experience;
   equipment: Equipment;
+  gymMachines?: string[];
+  homeItems?: string[];
   weekdays: number[];
   sessionMinutes: number;
 }
@@ -40,6 +53,7 @@ export interface Goal {
   type: GoalType;
   targetWeightKg: number | null;
   notes: string;
+  focusAreas?: FocusArea[];
 }
 
 export interface Exercise {
@@ -99,6 +113,86 @@ export interface CompletedSession {
   date: string;
   dayId: string;
   rpe: number;
+  exercisesDone?: string[];
+}
+
+export interface NutritionPrefs {
+  restrictions: FoodRestriction[];
+  dislikes: FoodDislike[];
+  notes: string;
+}
+
+export interface WeeklyMenuMeal {
+  slot: MealSlot;
+  title: string;
+  items: string[];
+  note?: string;
+}
+
+export interface WeeklyMenuDay {
+  weekday: number;
+  trainingName: string | null;
+  trainingIntensity: Intensity | null;
+  note: string;
+  meals: WeeklyMenuMeal[];
+}
+
+export interface WeeklyMenu {
+  generatedAt: string;
+  summary: string;
+  rationale: string[];
+  days: WeeklyMenuDay[];
+  groceries: { group: string; items: string[] }[];
+}
+
+export type MealSlot = "breakfast" | "lunch" | "snack" | "dinner";
+
+export type FoodRestriction =
+  | "none"
+  | "dairy"
+  | "gluten"
+  | "egg"
+  | "fish"
+  | "shellfish"
+  | "nuts"
+  | "peanuts"
+  | "soy"
+  | "legumes";
+
+export type FoodDislike =
+  | "chicken"
+  | "red_meat"
+  | "pork"
+  | "fish"
+  | "egg"
+  | "dairy"
+  | "legumes"
+  | "nuts"
+  | "oats"
+  | "spicy";
+
+export type MindFocus =
+  | "sleep"
+  | "stress"
+  | "focus"
+  | "consistency"
+  | "body";
+
+export interface MindPrefs {
+  focuses: MindFocus[];
+  notes: string;
+}
+
+export interface MindLog {
+  id: string;
+  date: string;
+  practiceId: string;
+}
+
+export interface MealLog {
+  id: string;
+  date: string;
+  slot: MealSlot;
 }
 
 export interface AppState {
@@ -107,6 +201,14 @@ export interface AppState {
   plan: Plan;
   checkIns: CheckIn[];
   sessions: CompletedSession[];
+  nutritionAcceptedAt?: string;
+  planAcceptedAt?: string;
+  nutritionPrefs?: NutritionPrefs;
+  weeklyMenu?: WeeklyMenu;
+  mindAcceptedAt?: string;
+  mindPrefs?: MindPrefs;
+  mindLogs?: MindLog[];
+  mealLogs?: MealLog[];
 }
 
 export interface OnboardingDraft {

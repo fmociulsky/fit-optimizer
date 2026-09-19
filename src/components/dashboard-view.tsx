@@ -1,30 +1,42 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Apple,
+  Brain,
   CalendarCheck,
+  CalendarDays,
   CheckCircle2,
   Moon,
+  RefreshCw,
 } from "lucide-react";
 import { CheckInDialog } from "@/components/check-in-dialog";
 import { SiteHeader } from "@/components/site-header";
+import { PlanWarning } from "@/components/plan-warning";
 import { WeightChart } from "@/components/weight-chart";
 import { WorkoutDayCard } from "@/components/workout-day-card";
 import { useAppStore } from "@/components/app-provider";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  EQUIPMENT_LABEL,
+  FOCUS_AREA_LABEL,
   GOAL_LABEL,
   HORIZON_LABEL,
   weekdayName,
   weekdayShort,
 } from "@/lib/labels";
+import { gymMachineNames } from "@/lib/gym-machines";
+import { homeItemNames } from "@/lib/home-items";
+import { PLAN_ACCEPTANCE_TEXT } from "@/lib/disclaimers";
 import {
   checkInDue,
   currentWeek,
@@ -47,10 +59,21 @@ function Score({ value }: { value: number }) {
   );
 }
 
+function zonesLabel(areas?: (keyof typeof FOCUS_AREA_LABEL)[] | null) {
+  if (!areas?.length || areas.includes("full_body")) {
+    return FOCUS_AREA_LABEL.full_body;
+  }
+  return areas
+    .filter((area) => area !== "full_body")
+    .map((area) => FOCUS_AREA_LABEL[area])
+    .join(", ");
+}
+
 export function DashboardView() {
   const router = useRouter();
-  const { ready, state, logSession, reset } = useAppStore();
+  const { ready, state, logSession, reset, acceptPlanGuide } = useAppStore();
   const [rpe, setRpe] = useState(7);
+  const [acceptedNotice, setAcceptedNotice] = useState(false);
 
   useEffect(() => {
     if (ready && !state) router.replace("/comenzar");
@@ -74,6 +97,45 @@ export function DashboardView() {
   const lastCheck = state.checkIns.at(-1);
   const firstName = state.profile.name.split(" ")[0];
 
+  if (!state.planAcceptedAt) {
+    return (
+      <div className="min-h-svh bg-background">
+        <SiteHeader />
+        <main className="mx-auto w-full max-w-xl px-4 py-10">
+          <p className="text-sm font-medium tracking-wide text-primary uppercase">
+            Tu plan
+          </p>
+          <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
+            Un aviso, {firstName}.
+          </h1>
+          <p className="mt-3 text-muted-foreground">
+            Antes de las sesiones, esto tiene que quedar claro.
+          </p>
+          <div className="mt-8">
+            <PlanWarning />
+          </div>
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-foreground/8 bg-card px-4 py-4">
+            <Checkbox
+              checked={acceptedNotice}
+              onCheckedChange={(value) => setAcceptedNotice(Boolean(value))}
+              className="mt-0.5"
+            />
+            <span className="text-sm leading-relaxed">
+              {PLAN_ACCEPTANCE_TEXT}
+            </span>
+          </label>
+          <Button
+            className="mt-6 h-11 px-4"
+            disabled={!acceptedNotice}
+            onClick={acceptPlanGuide}
+          >
+            Acepto y ver mi plan
+          </Button>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-svh bg-background">
       <SiteHeader />
@@ -87,8 +149,8 @@ export function DashboardView() {
               Hola, {firstName}.
             </h1>
             <p className="mt-2 max-w-xl text-muted-foreground">
-              {GOAL_LABEL[state.goal.type]} · {HORIZON_LABEL[state.goal.horizon]} ·{" "}
-              {currentWeight(state).toFixed(1)} kg
+              {GOAL_LABEL[state.goal.type]} · {zonesLabel(state.goal.focusAreas)} ·{" "}
+              {HORIZON_LABEL[state.goal.horizon]} · {currentWeight(state).toFixed(1)} kg
             </p>
           </div>
           <CheckInDialog due={due} />
@@ -121,6 +183,10 @@ export function DashboardView() {
             {daysUntilCheckIn(state) === 1 ? "" : "s"}.
           </p>
         )}
+
+        <div className="mt-6">
+          <PlanWarning compact />
+        </div>
 
         <Tabs defaultValue="hoy" className="mt-8">
           <TabsList className="w-full sm:w-auto">
@@ -190,19 +256,107 @@ export function DashboardView() {
                     <p className="font-heading text-2xl italic">Día de descanso</p>
                     <p className="mt-1 text-muted-foreground">
                       Camina un poco si te apetece, duerme y come como si el
-                      entrenamiento de mañana importara. Porque importa.
+                      entrenamiento de mañana importara. Porque importa. Si la
+                      cabeza no para, en Mente hay un bloque corto para hoy.
                     </p>
                   </div>
                 </CardContent>
               </Card>
             )}
+            <Card>
+              <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <CalendarDays className="mt-0.5 size-5 shrink-0 text-primary" />
+                  <div>
+                    <p className="font-medium">Agenda de la semana</p>
+                    <p className="text-sm text-muted-foreground">
+                      Todas las tareas, día a día: entreno, comidas y mente.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/agenda"
+                  className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+                >
+                  Ver agenda
+                </Link>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <RefreshCw className="mt-0.5 size-5 shrink-0 text-primary" />
+                  <div>
+                    <p className="font-medium">¿Cambiaste de sitio?</p>
+                    <p className="text-sm text-muted-foreground">
+                      De casa a gimnasio, o al revés. Rearmamos ejercicios con el
+                      material nuevo y guardamos check-ins y sesiones.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/comenzar?modo=rearmar"
+                  className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+                >
+                  Reconfigurar plan
+                </Link>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <Apple className="mt-0.5 size-5 shrink-0 text-primary" />
+                  <div>
+                    <p className="font-medium">Comer, en bruto</p>
+                    <p className="text-sm text-muted-foreground">
+                      Guía orientativa: calorías y un día tipo. No sustituye a
+                      un nutricionista profesional.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/nutricion"
+                  className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+                >
+                  Ver nutrición
+                </Link>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <Brain className="mt-0.5 size-5 shrink-0 text-primary" />
+                  <div>
+                    <p className="font-medium">Mente</p>
+                    <p className="text-sm text-muted-foreground">
+                      Prácticas cortas, paso a paso: respirar más lento, estar
+                      quieto, pasear sin móvil.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/mente"
+                  className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+                >
+                  Ver mente
+                </Link>
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="semana" className="mt-6 space-y-4">
-            <p className="text-sm text-muted-foreground">
-              {weekSessions.length} de {state.profile.weekdays.length} sesiones
-              apuntadas esta semana.
-            </p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                {weekSessions.length} de {state.profile.weekdays.length} sesiones
+                apuntadas esta semana.
+              </p>
+              <Link
+                href="/agenda"
+                className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+              >
+                Ver agenda completa
+              </Link>
+            </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {grid.map(({ weekday, workout }) => (
                 <div
@@ -358,23 +512,85 @@ export function DashboardView() {
               </ul>
             </div>
             <div>
+              <h2 className="font-heading text-2xl italic">Zonas</h2>
+              <p className="mt-2 text-sm">
+                {zonesLabel(state.goal.focusAreas)}
+              </p>
+            </div>
+            <div>
+              <h2 className="font-heading text-2xl italic">Material</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {EQUIPMENT_LABEL[state.profile.equipment]}
+              </p>
+              {state.profile.equipment === "full_gym" && (
+                <p className="mt-2 text-sm">
+                  {gymMachineNames(state.profile.gymMachines).join(" · ")}
+                </p>
+              )}
+              {state.profile.equipment !== "full_gym" && (
+                <p className="mt-2 text-sm">
+                  {homeItemNames(state.profile.homeItems).join(" · ") ||
+                    "Aún no marcaste lo de casa. Reconfigura el plan."}
+                </p>
+              )}
+            </div>
+            {state.plan.adjustments.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="font-heading text-2xl italic">Reconfiguraciones</h2>
+                <ul className="space-y-2">
+                  {state.plan.adjustments
+                    .slice()
+                    .reverse()
+                    .map((adjustment) => (
+                      <li
+                        key={adjustment.id}
+                        className="rounded-2xl border px-4 py-3 text-sm"
+                      >
+                        <p className="font-medium">
+                          {formatDate(adjustment.date)} · {adjustment.reason}
+                        </p>
+                        <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+                          {adjustment.changes.map((change) => (
+                            <li key={change}>{change}</li>
+                          ))}
+                        </ul>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            )}
+            <div>
               <h2 className="font-heading text-2xl italic">Comida, en bruto</h2>
               <ul className="mt-3 list-disc space-y-2 pl-4 text-sm text-muted-foreground">
                 {state.plan.nutritionHints.map((n) => (
                   <li key={n}>{n}</li>
                 ))}
               </ul>
+              <Link
+                href="/nutricion"
+                className={cn(buttonVariants({ variant: "outline" }), "mt-4 h-11 px-4")}
+              >
+                Abrir la guía de nutrición
+              </Link>
             </div>
-            <Button
-              variant="outline"
-              className="h-11 px-4"
-              onClick={() => {
-                reset();
-                router.push("/");
-              }}
-            >
-              Borrar este plan y empezar otro
-            </Button>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Link
+                href="/comenzar?modo=rearmar"
+                className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
+              >
+                Reconfigurar material y rearmar
+              </Link>
+              <Button
+                variant="ghost"
+                className="h-11 px-4"
+                onClick={() => {
+                  reset();
+                  router.push("/");
+                }}
+              >
+                Borrar este plan y empezar otro
+              </Button>
+            </div>
           </TabsContent>
         </Tabs>
       </main>
