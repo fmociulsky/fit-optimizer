@@ -65,7 +65,8 @@ function NutritionWarning({ compact = false }: { compact?: boolean }) {
 
 export function NutritionView() {
   const router = useRouter();
-  const { ready, state, acceptNutritionGuide, saveNutritionMenu } = useAppStore();
+  const { ready, state, account, acceptNutritionGuide, saveNutritionMenu } =
+    useAppStore();
   const [acceptedNotice, setAcceptedNotice] = useState(false);
 
   useEffect(() => {
@@ -81,6 +82,35 @@ export function NutritionView() {
   }
 
   const firstName = state.profile.name.split(" ")[0];
+  const studioStudent =
+    account?.role === "client" && account.studioRole === "client";
+  const teacherFood = state.plan.coachNutrition ?? [];
+
+  if (studioStudent && teacherFood.length === 0) {
+    return (
+      <div className="min-h-svh bg-background">
+        <SiteHeader />
+        <main className="mx-auto w-full max-w-xl px-4 py-10">
+          <p className="text-sm font-medium tracking-wide text-primary uppercase">
+            Nutrición
+          </p>
+          <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
+            Tu comida.
+          </h1>
+          <p className="mt-3 text-muted-foreground">
+            Tu profesor todavía no cargó un plan nutricional. Cuando lo haga,
+            aparece acá.
+          </p>
+          <Link
+            href="/panel"
+            className={cn(buttonVariants({ variant: "outline" }), "mt-6 h-11 px-4")}
+          >
+            Volver al plan
+          </Link>
+        </main>
+      </div>
+    );
+  }
 
   if (!state.nutritionAcceptedAt) {
     return (

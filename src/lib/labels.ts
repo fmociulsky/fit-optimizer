@@ -7,6 +7,8 @@ import type {
   Intensity,
   MedicalFlag,
   Sex,
+  StudioDayHours,
+  StudioKind,
 } from "./types";
 
 export const WEEKDAYS: { id: number; short: string; full: string }[] = [
@@ -18,6 +20,36 @@ export const WEEKDAYS: { id: number; short: string; full: string }[] = [
   { id: 6, short: "Sáb", full: "Sábado" },
   { id: 0, short: "Dom", full: "Domingo" },
 ];
+
+export function studioKindsLabel(kinds: StudioKind[]) {
+  const gym = kinds.includes("gym");
+  const pilates = kinds.includes("pilates");
+  if (gym && pilates) return "Gimnasio y pilates";
+  if (gym) return "Gimnasio";
+  return "Pilates";
+}
+
+export function activityShortLabel(kinds: StudioKind[]) {
+  const gym = kinds.includes("gym");
+  const pilates = kinds.includes("pilates");
+  if (gym && pilates) return "Ambos";
+  if (gym) return "Gimnasio";
+  return "Pilates";
+}
+
+export function studioHoursSummary(dayHours: StudioDayHours[]) {
+  if (!dayHours.length) return "Sin días abiertos";
+  const days = WEEKDAYS.filter((day) =>
+    dayHours.some((item) => item.weekday === day.id)
+  )
+    .map((day) => day.short)
+    .join(" · ");
+  const first = dayHours[0];
+  const same = dayHours.every(
+    (item) => item.openFrom === first.openFrom && item.openTo === first.openTo
+  );
+  return same ? `${days} · ${first.openFrom}–${first.openTo}` : days;
+}
 
 export const SEX_LABEL: Record<Sex, string> = {
   female: "Mujer",
@@ -41,12 +73,16 @@ export const EQUIPMENT_LABEL: Record<Equipment, string> = {
   full_gym: "Gimnasio",
   home_dumbbells: "Casa",
   bodyweight: "Casa, sin pesas",
+  pilates: "Pilates",
+  coach: "Mi profesor",
 };
 
 export const EQUIPMENT_HINT: Record<Equipment, string> = {
   full_gym: "Luego marcas las máquinas que hay de verdad",
   home_dumbbells: "Luego marcas mancuernas, banco, bandas o lo que tengas",
   bodyweight: "Luego marcas silla, colchoneta, bandas, pared…",
+  pilates: "Luego marcas colchoneta, reformer, aro o lo que uses en sala",
+  coach: "El gimnasio te asigna quién te entrena",
 };
 
 export const HORIZON_LABEL: Record<Horizon, string> = {

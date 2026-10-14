@@ -1,4 +1,5 @@
 import type {
+  Equipment,
   Exercise,
   FocusArea,
   Goal,
@@ -8,8 +9,16 @@ import type {
   Profile,
   WorkoutDay,
 } from "./types";
-import { gymMachineNames, listGymStations, pickGymExercise, type PlanMove, type StationWork } from "./gym-machines";
-import { homeItemNames, pickHomeExercise } from "./home-items";
+import { gymMachineNames, listGymStations, pickGymExercise, TYPICAL_GYM_MACHINE_IDS, type PlanMove, type StationWork } from "./gym-machines";
+import { homeItemNames, pickHomeExercise, seedHomeItems } from "./home-items";
+import {
+  listPilatesWork,
+  pilatesItemNames,
+  pickPilatesMove,
+  seedPilatesItems,
+  toPilatesExercise,
+  TYPICAL_PILATES_IDS,
+} from "./pilates";
 import { ageBand, calcBmi, horizonWeeks, profileAge } from "./metrics";
 import { nutritionHints } from "./nutrition";
 import { GOAL_LABEL, HORIZON_LABEL, FOCUS_AREA_LABEL } from "./labels";
@@ -125,7 +134,9 @@ function ex(
   const picked =
     profile.equipment === "full_gym"
       ? pickGymExercise(profile.gymMachines, key)
-      : pickHomeExercise(profile.homeItems, key, profile.equipment);
+      : profile.equipment === "pilates"
+        ? pickPilatesMove(profile.pilatesItems, key)
+        : pickHomeExercise(profile.homeItems, key, profile.equipment);
   const swapped = swapForFlags(profile, key, picked.name);
   const extraRest =
     hasFlag(profile.medicalFlags, "hypertension") ||
@@ -155,7 +166,9 @@ function condBlock(profile: Profile, minutes: number, machineName?: string): Exe
         ? machineName
         : profile.equipment === "full_gym"
           ? pickGymExercise(profile.gymMachines, "walk").name
-          : pickHomeExercise(profile.homeItems, "walk", profile.equipment).name;
+          : profile.equipment === "pilates"
+            ? pickPilatesMove(profile.pilatesItems, "walk").name
+            : pickHomeExercise(profile.homeItems, "walk", profile.equipment).name;
   return {
     name,
     sets: 1,
@@ -170,6 +183,24 @@ function condBlock(profile: Profile, minutes: number, machineName?: string): Exe
 }
 
 function warmup(profile: Profile) {
+  if (profile.equipment === "pilates") {
+    const parts = [
+      "1 minuto de respiración costal",
+      "reloj pélvico",
+      "gato-camello",
+      "círculos de hombros",
+    ];
+    if (hasFlag(profile.medicalFlags, "asthma") || hasFlag(profile.medicalFlags, "cardiac")) {
+      parts[0] = "2 minutos de respiración muy gradual, sentada o de pie";
+    }
+    if (hasFlag(profile.medicalFlags, "knee_hip")) {
+      parts.push("círculos de tobillo y puentes suaves");
+    }
+    if (hasFlag(profile.medicalFlags, "back_pain")) {
+      parts.push("gato-camello extra corto, sin forzar la extensión");
+    }
+    return parts.join(", ") + ".";
+  }
   const parts = [
     "5 minutos de marcha o bici suave",
     "círculos de hombros",
@@ -187,7 +218,10 @@ function warmup(profile: Profile) {
   return parts.join(", ") + ".";
 }
 
-function cooldown() {
+function cooldown(profile?: Profile) {
+  if (profile?.equipment === "pilates") {
+    return "Sirena o child pose, estiramiento de flexores de cadera y 1 minuto de respiración lenta. Sin rebotes.";
+  }
   return "3–5 minutos de caminata y estiramientos suaves de cadera, pecho y dorsal. Sin rebotes.";
 }
 
@@ -211,7 +245,7 @@ function day(
     intensity,
     exercises,
     warmup: warmup(profile),
-    cooldown: cooldown(),
+    cooldown: cooldown(profile),
   };
 }
 
@@ -353,7 +387,7 @@ function focusedTemplates(
     durationMin,
     exercises,
     warmup: warmup(profile),
-    cooldown: cooldown(),
+    cooldown: cooldown(profile),
   });
 
   const strengthDay = (
@@ -533,7 +567,7 @@ function gymTemplates(
     durationMin: minutes,
     exercises,
     warmup: warmup(profile),
-    cooldown: cooldown(),
+    cooldown: cooldown(profile),
   });
 
   const dayFrom = (
@@ -639,6 +673,164 @@ function gymTemplates(
   return days.length ? days : null;
 }
 
+function swapPilatesWork(
+  profile: Profile,
+  work: ReturnType<typeof listPilatesWork>[number]
+) {
+  if (
+    hasFlag(profile.medicalFlags, "pregnancy") &&
+    (/cien|tijeras|long stretch|single leg stretch/i.test(work.name) ||
+      work.role === "core")
+  ) {
+    return {
+      ...work,
+      name: "Bird-dog + respiración diafragmática",
+      reps: "8–10 por lado",
+      notes: "Evita el cien clásico y el decúbito supino prolongado.",
+    };
+  }
+  if (
+    hasFlag(profile.medicalFlags, "back_pain") &&
+    /roll up|cien|round back|long stretch|tijeras/i.test(work.name)
+  ) {
+    return {
+      ...work,
+      name: "Puente de hombros corto + bird-dog",
+      reps: "8–10",
+      notes: "Sin flexión lumbar cargada. Para si hay pinchazo.",
+    };
+  }
+  if (hasFlag(profile.medicalFlags, "hypertension") && /cien/i.test(work.name)) {
+    return {
+      ...work,
+      name: "Plancha pilates con respiración continua",
+      reps: "20–30 s",
+      notes: "Sin aguantar el aire ni bombear la cabeza.",
+    };
+  }
+  if (
+    hasFlag(profile.medicalFlags, "knee_hip") &&
+    /footwork|scooter|step-up|standing pump/i.test(work.name)
+  ) {
+    return {
+      ...work,
+      name: "Puente de hombros en rango cómodo",
+      reps: "8–10",
+      notes: "Rango que no moleste rodilla o cadera. Sin rebotes.",
+    };
+  }
+  return work;
+}
+
+function pilatesTemplates(
+  profile: Profile,
+  goal: Goal,
+  intensity: Intensity
+): Omit<WorkoutDay, "id" | "weekday">[] | null {
+  const minutes = profile.sessionMinutes;
+  const sessionIntensity: Intensity = intensity === "high" ? "moderate" : intensity;
+  const zones = fullBodyFocus(goal.focusAreas) ? null : selectedZones(goal);
+  const pool = listPilatesWork(profile.pilatesItems, zones);
+  if (!pool.length) return null;
+
+  const shell = (
+    name: string,
+    focus: string,
+    sessionIntensity: Intensity,
+    exercises: Exercise[]
+  ): Omit<WorkoutDay, "id" | "weekday"> => ({
+    name,
+    focus,
+    intensity: sessionIntensity,
+    durationMin: minutes,
+    exercises,
+    warmup: warmup(profile),
+    cooldown: cooldown(profile),
+  });
+
+  const fromRoles = (
+    roles: Array<ReturnType<typeof listPilatesWork>[number]["role"]>,
+    name: string,
+    focus: string,
+    offset: number
+  ) => {
+    const ranked = [
+      ...rotateList(
+        pool.filter((item) => roles.includes(item.role)),
+        offset
+      ),
+      ...rotateList(
+        pool.filter((item) => item.role === "core" && !roles.includes("core")),
+        offset
+      ),
+      ...rotateList(pool, offset + 1),
+    ];
+    const budget = minutes <= 30 ? 4 : minutes <= 45 ? 6 : minutes <= 60 ? 7 : 8;
+    const chosen: typeof pool = [];
+    for (const item of ranked) {
+      if (chosen.length >= budget) break;
+      if (!chosen.some((entry) => entry.name === item.name)) {
+        chosen.push(item);
+      }
+    }
+    const used = chosen.slice(0, 3).map((item) => item.name).join(", ");
+    return shell(
+      name,
+      used ? `Con: ${used}` : focus,
+      sessionIntensity,
+      trimToMinutes(
+        chosen.map((item) =>
+          toPilatesExercise(profile, sessionIntensity, swapPilatesWork(profile, item))
+        ),
+        minutes
+      )
+    );
+  };
+
+  const days: Omit<WorkoutDay, "id" | "weekday">[] = [
+    fromRoles(["core", "spine"], "Pilates · powerhouse", "Centro y respiración", 0),
+  ];
+  if (pool.some((item) => item.role === "lower")) {
+    days.push(
+      fromRoles(
+        ["lower"],
+        "Pilates · cadera y glúteo",
+        "Pelvis, glúteo y control de pierna",
+        0
+      )
+    );
+  }
+  if (pool.some((item) => item.role === "spine")) {
+    days.push(
+      fromRoles(["spine", "core"], "Pilates · columna", "Articulación y movilidad", 1)
+    );
+  }
+  if (pool.some((item) => item.role === "upper")) {
+    days.push(
+      fromRoles(
+        ["upper"],
+        "Pilates · tren superior",
+        "Espalda, hombros y brazos",
+        0
+      )
+    );
+  }
+  days.push(
+    fromRoles(
+      ["core", "lower", "upper", "spine", "balance"],
+      "Pilates · cuerpo completo",
+      "Flujo de todo el centro",
+      2
+    )
+  );
+  if (pool.some((item) => item.role === "balance") && profile.weekdays.length >= 5) {
+    days.push(
+      fromRoles(["balance", "spine"], "Pilates · equilibrio", "Estabilidad y control", 0)
+    );
+  }
+  return days;
+}
+
 function templates(
   profile: Profile,
   goal: Goal,
@@ -649,6 +841,11 @@ function templates(
     goal.type === "fat_loss" || goal.type === "endurance"
       ? Math.min(20, Math.max(8, Math.round(minutes * 0.25)))
       : Math.min(12, Math.max(6, Math.round(minutes * 0.15)));
+
+  if (profile.equipment === "pilates") {
+    const pilatesDays = pilatesTemplates(profile, goal, intensity);
+    if (pilatesDays?.length) return pilatesDays;
+  }
 
   if (profile.equipment === "full_gym") {
     const gymDays = gymTemplates(profile, goal, intensity, condMin);
@@ -730,34 +927,34 @@ function templates(
   if (goal.type === "endurance") {
     if (count <= 3) {
       return [
-        { name: "Fuerza + base", focus: "Cuerpo completo y caminata", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown() },
-        { name: "Cardio controlado", focus: "Capacidad aeróbica", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown() },
-        { name: "Fuerza B + base", focus: "Tirón, empujón y cadera", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown() },
+        { name: "Fuerza + base", focus: "Cuerpo completo y caminata", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown(profile) },
+        { name: "Cardio controlado", focus: "Capacidad aeróbica", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown(profile) },
+        { name: "Fuerza B + base", focus: "Tirón, empujón y cadera", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown(profile) },
       ];
     }
     return [
-      { name: "Fuerza A", focus: "Empuje y sentadilla", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Cardio 1", focus: "Zona cómoda", intensity: "moderate", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Fuerza B", focus: "Tirón y bisagra", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Cardio 2", focus: "Volumen aeróbico", intensity: "low", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Movilidad", focus: "Recuperación activa", intensity: "low", durationMin: Math.min(40, minutes), exercises: mobility, warmup: warmup(profile), cooldown: cooldown() },
+      { name: "Fuerza A", focus: "Empuje y sentadilla", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Cardio 1", focus: "Zona cómoda", intensity: "moderate", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Fuerza B", focus: "Tirón y bisagra", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Cardio 2", focus: "Volumen aeróbico", intensity: "low", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Movilidad", focus: "Recuperación activa", intensity: "low", durationMin: Math.min(40, minutes), exercises: mobility, warmup: warmup(profile), cooldown: cooldown(profile) },
     ];
   }
 
   if (goal.type === "strength" && count >= 4) {
     return [
-      { name: "Tren superior fuerza", focus: "Press y remo", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Tren inferior fuerza", focus: "Sentadilla y bisagra", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Tren superior volumen", focus: "Empuje y tirón extra", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Tren inferior volumen", focus: "Piernas y core", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Acondicionamiento", focus: "Salud cardíaca", intensity: "low", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown() },
+      { name: "Tren superior fuerza", focus: "Press y remo", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Tren inferior fuerza", focus: "Sentadilla y bisagra", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Tren superior volumen", focus: "Empuje y tirón extra", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Tren inferior volumen", focus: "Piernas y core", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Acondicionamiento", focus: "Salud cardíaca", intensity: "low", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown(profile) },
     ];
   }
 
   if (count <= 3) {
     return [
-      { name: "Cuerpo completo A", focus: "Sentadilla, press y remo", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown() },
-      { name: "Cuerpo completo B", focus: "Bisagra, dominantes de tirón", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown() },
+      { name: "Cuerpo completo A", focus: "Sentadilla, press y remo", intensity, durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown(profile) },
+      { name: "Cuerpo completo B", focus: "Bisagra, dominantes de tirón", intensity, durationMin: minutes, exercises: strengthB, warmup: warmup(profile), cooldown: cooldown(profile) },
       { name: "Cuerpo completo C", focus: "Unilateral, core y base", intensity: capIntensity(profile, "moderate"), durationMin: minutes, exercises: trimToMinutes([
         ex(profile, goal, intensity, "lunge"),
         ex(profile, goal, intensity, "press"),
@@ -765,17 +962,17 @@ function templates(
         ex(profile, goal, intensity, "glute"),
         ex(profile, goal, intensity, "core", undefined, false),
         condBlock(profile, condMin),
-      ], minutes), warmup: warmup(profile), cooldown: cooldown() },
+      ], minutes), warmup: warmup(profile), cooldown: cooldown(profile) },
     ];
   }
 
   return [
-    { name: "Tren superior A", focus: "Press y remo", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown() },
-    { name: "Tren inferior A", focus: "Sentadilla y glúteo", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown() },
-    { name: "Tren superior B", focus: "Empuje vertical y tirón", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown() },
-    { name: "Tren inferior B", focus: "Bisagra y unilateral", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown() },
-    { name: "Acondicionamiento + core", focus: "Condición y movilidad", intensity: "moderate", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown() },
-    { name: "Cuerpo completo ligero", focus: "Técnica y calidad", intensity: "low", durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown() },
+    { name: "Tren superior A", focus: "Press y remo", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown(profile) },
+    { name: "Tren inferior A", focus: "Sentadilla y glúteo", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown(profile) },
+    { name: "Tren superior B", focus: "Empuje vertical y tirón", intensity, durationMin: minutes, exercises: upper, warmup: warmup(profile), cooldown: cooldown(profile) },
+    { name: "Tren inferior B", focus: "Bisagra y unilateral", intensity, durationMin: minutes, exercises: lower, warmup: warmup(profile), cooldown: cooldown(profile) },
+    { name: "Acondicionamiento + core", focus: "Condición y movilidad", intensity: "moderate", durationMin: minutes, exercises: cardio, warmup: warmup(profile), cooldown: cooldown(profile) },
+    { name: "Cuerpo completo ligero", focus: "Técnica y calidad", intensity: "low", durationMin: minutes, exercises: strengthA, warmup: warmup(profile), cooldown: cooldown(profile) },
   ];
 }
 
@@ -803,6 +1000,9 @@ function warningsFor(profile: Profile, goal: Goal): string[] {
   }
   if (hasFlag(profile.medicalFlags, "pregnancy")) {
     w.push("Embarazo/postparto: este plan es conservador a propósito. Un suelo pélvico o matrona debe validarlo.");
+  }
+  if (profile.equipment === "pilates") {
+    w.push("En pilates manda la calidad del gesto. Si hay pinchazo en lumbar o cuello, para y acorta el rango. Reformer y cadillac conviene hacerlos con alguien que te haya enseñado el aparato.");
   }
   if (hasFlag(profile.medicalFlags, "recent_injury")) {
     w.push("Lesión reciente: bajamos volumen. Si un gesto reproduce el dolor de la lesión, sustitúyelo.");
@@ -842,6 +1042,13 @@ function rationale(profile: Profile, goal: Goal, intensity: Intensity): string[]
         ? `El gimnasio se arma con lo que marcaste (${machines.slice(0, 8).join(", ")}${machines.length > 8 ? "…" : ""}). Si falta una máquina, hay variante.`
         : "Marcaste gimnasio pero ninguna máquina: usamos variantes de peso corporal hasta que reconfigures."
     );
+  } else if (profile.equipment === "pilates") {
+    const studio = pilatesItemNames(profile.pilatesItems);
+    items.push(
+      studio.length
+        ? `El pilates se arma con lo que marcaste (${studio.join(", ")}). El centro (powerhouse) entra en cada sesión.`
+        : "Marcaste pilates: el plan sale de colchoneta hasta que indiques reformer, aro u otro aparato."
+    );
   } else {
     const itemsAtHome = homeItemNames(profile.homeItems);
     items.push(
@@ -864,6 +1071,11 @@ function rationale(profile: Profile, goal: Goal, intensity: Intensity): string[]
 }
 
 function weeklyFocus(profile: Profile, goal: Goal) {
+  if (profile.equipment === "pilates") {
+    return fullBodyFocus(goal.focusAreas)
+      ? "Pilates: el centro manda. Calidad del gesto y respiración, no carga máxima."
+      : `Pilates con foco en ${zonesText(goal.focusAreas).toLowerCase()}. El centro sigue en cada ejercicio.`;
+  }
   if (!fullBodyFocus(goal.focusAreas)) {
     return `Este bloque prioriza ${zonesText(goal.focusAreas).toLowerCase()}. Si un día no puedes esa zona, haces la sesión suave, no la saltas.`;
   }
@@ -884,7 +1096,9 @@ export function generatePlan(
   previous?: Plan | null
 ): Plan {
   const preferred: Intensity =
-    goal.type === "strength" && profile.experience !== "beginner"
+    profile.equipment === "pilates"
+      ? "moderate"
+      : goal.type === "strength" && profile.experience !== "beginner"
       ? "high"
       : goal.type === "health"
         ? "moderate"
@@ -892,6 +1106,31 @@ export function generatePlan(
           ? "high"
           : "moderate";
   const intensity = capIntensity(profile, preferred);
+
+  if (profile.equipment === "coach") {
+    return {
+      id: previous?.id ?? uid(),
+      createdAt: previous?.createdAt ?? new Date().toISOString(),
+      startWeightKg: previous?.startWeightKg ?? profile.weightKg,
+      version: previous ? previous.version + 1 : 1,
+      durationWeeks: horizonWeeks(goal.horizon),
+      weeklySplit: [],
+      rationale: [
+        `Objetivo ${GOAL_LABEL[goal.type].toLowerCase()} a ${HORIZON_LABEL[goal.horizon].toLowerCase()} (${horizonWeeks(goal.horizon)} semanas). El entrenamiento lo arma tu profesor, no Enforma.`,
+        `Marcaste ${profile.weekdays.length} días y sesiones de ${profile.sessionMinutes} min: eso es tu disponibilidad, para que quien te entrena sepa encajar el plan.`,
+        fullBodyFocus(goal.focusAreas)
+          ? "Las zonas y el objetivo quedan anotados para tu profesor."
+          : `Pediste foco en ${zonesText(goal.focusAreas).toLowerCase()}. Tu profesor decide cómo cargarlo.`,
+        "El plan físico aparece cuando tu profesor lo cargue.",
+      ],
+      warnings: warningsFor(profile, goal),
+      nutritionHints: nutritionHints(profile, goal),
+      weeklyFocus:
+        "El entrenamiento lo carga tu profesor.",
+      adjustments: previous?.adjustments ?? [],
+    };
+  }
+
   const catalog = templates(profile, goal, intensity);
   const split = profile.weekdays.map((weekday, index) => {
     const template = catalog[index % catalog.length];
@@ -920,4 +1159,46 @@ export function generatePlan(
     weeklyFocus: weeklyFocus(profile, goal),
     adjustments: previous?.adjustments ?? [],
   };
+}
+
+export type TrainingPlace = Exclude<Equipment, "coach">;
+
+export function branchTrainingPlaces(branch: {
+  gymMachines: string[];
+  pilatesItems: string[];
+}): TrainingPlace[] {
+  const places: TrainingPlace[] = [];
+  if (branch.gymMachines.length) places.push("full_gym");
+  if (branch.pilatesItems.length) places.push("pilates");
+  return places;
+}
+
+export function generateWeeklySplit(
+  profile: Profile,
+  goal: Goal,
+  place: TrainingPlace,
+  branchEquipment?: { gymMachines: string[]; pilatesItems: string[] }
+): WorkoutDay[] {
+  const locked = Boolean(branchEquipment);
+  const gymMachines = locked
+    ? branchEquipment!.gymMachines
+    : profile.gymMachines?.length
+      ? profile.gymMachines
+      : [...TYPICAL_GYM_MACHINE_IDS];
+  const pilatesItems = locked
+    ? branchEquipment!.pilatesItems
+    : profile.pilatesItems?.length
+      ? profile.pilatesItems
+      : [...TYPICAL_PILATES_IDS];
+  const trainingProfile: Profile = {
+    ...profile,
+    equipment: place,
+    gymMachines: place === "full_gym" ? gymMachines : profile.gymMachines,
+    homeItems:
+      place === "full_gym" || place === "pilates"
+        ? []
+        : seedHomeItems(place, profile.homeItems),
+    pilatesItems: place === "pilates" ? pilatesItems : profile.pilatesItems,
+  };
+  return generatePlan(trainingProfile, goal).weeklySplit;
 }

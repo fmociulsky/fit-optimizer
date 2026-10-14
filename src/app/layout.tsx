@@ -1,6 +1,10 @@
+import { ClerkProvider } from "@clerk/nextjs";
+import { esES } from "@clerk/localizations";
+import { shadcn } from "@clerk/ui/themes";
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import { AppProvider } from "@/components/app-provider";
+import { RoleGate } from "@/components/role-gate";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -22,9 +26,9 @@ const newsreader = Newsreader({
 });
 
 export const metadata: Metadata = {
-  title: "Enforma — tu plan de gimnasio con seguimiento",
+  title: "Enforma — gimnasio, profesores y alumnos",
   description:
-    "Define un objetivo a corto, mediano o largo plazo. Enforma arma un plan según tu edad, peso, altura y antecedentes, y lo reajusta con check-ins semanales.",
+    "Administra un gimnasio: profesores, alumnos, horarios y cupo. Cada alumno elige el día dentro del horario de su sucursal.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -35,12 +39,20 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col font-sans">
-        <ThemeProvider>
-          <AppProvider>
-            {children}
-            <Toaster />
-          </AppProvider>
-        </ThemeProvider>
+        <ClerkProvider
+          localization={esES}
+          appearance={{ theme: shadcn }}
+          afterSignOutUrl="/"
+        >
+          <ThemeProvider>
+            <AppProvider>
+              <RoleGate>
+                {children}
+                <Toaster />
+              </RoleGate>
+            </AppProvider>
+          </ThemeProvider>
+        </ClerkProvider>
       </body>
     </html>
   );

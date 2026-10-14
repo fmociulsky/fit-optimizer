@@ -20,21 +20,21 @@ export const HOME_CATEGORIES: HomeCategory[] = [
 ];
 
 export const HOME_ITEMS: HomeItem[] = [
-  { id: "dumbbells", name: "Mancuernas", hint: "Un par o más, aunque no pesen mucho", category: "Pesas", photo: "/machines/dumbbells.jpg" },
-  { id: "kettlebells", name: "Kettlebell", hint: "Una o varias pesas rusas", category: "Pesas", photo: "/machines/kettlebells.jpg" },
-  { id: "barbell", name: "Barra y discos", hint: "Si tienes espacio y platos", category: "Pesas", photo: "/machines/barbell.jpg" },
-  { id: "bands", name: "Bandas elásticas", hint: "Largas, de distintos grosores", category: "Bandas", photo: "/machines/functional.jpg" },
-  { id: "mini_bands", name: "Mini bandas", hint: "Las de tobillo y glúteo", category: "Bandas", photo: "/machines/hip_abductor.jpg" },
-  { id: "bench", name: "Banco", hint: "Plano o regulable", category: "Soporte", photo: "/machines/bench.jpg" },
-  { id: "box", name: "Cajón o step", hint: "También vale un taburete estable", category: "Soporte", photo: "/machines/box.jpg" },
-  { id: "chair", name: "Silla estable", hint: "Sin ruedas: fondos, apoyo, sentarse", category: "Soporte", photo: "/machines/box.jpg" },
-  { id: "pullup_bar", name: "Barra de dominadas", hint: "La de puerta vale", category: "Soporte", photo: "/machines/pullup_bar.jpg" },
-  { id: "trx", name: "TRX o anillas", hint: "Ancladas a puerta o techo", category: "Soporte", photo: "/machines/functional.jpg" },
-  { id: "mats", name: "Colchoneta", hint: "Suelo, core y movilidad", category: "Casa", photo: "/machines/mats.jpg" },
-  { id: "backpack", name: "Mochila o maleta", hint: "Para cargar y pasear", category: "Casa", photo: "/machines/farmers.jpg" },
-  { id: "wall", name: "Pared libre", hint: "Isométricos y pike push-up", category: "Casa", photo: "/machines/mats.jpg" },
-  { id: "jump_rope", name: "Cuerda de saltar", hint: "Cardio corto en poco espacio", category: "Cardio", photo: "/machines/elliptical.jpg" },
-  { id: "bike", name: "Bici estática", hint: "Si la tienes en casa", category: "Cardio", photo: "/machines/bike.jpg" },
+  { id: "dumbbells", name: "Mancuernas", hint: "Un par o más, aunque no pesen mucho", category: "Pesas", photo: "/home/dumbbells.jpg" },
+  { id: "kettlebells", name: "Kettlebell", hint: "Una o varias pesas rusas", category: "Pesas", photo: "/home/kettlebells.jpg" },
+  { id: "barbell", name: "Barra y discos", hint: "Si tienes espacio y platos", category: "Pesas", photo: "/home/barbell.jpg" },
+  { id: "bands", name: "Bandas elásticas", hint: "Largas, de distintos grosores", category: "Bandas", photo: "/home/bands.jpg" },
+  { id: "mini_bands", name: "Mini bandas", hint: "Las de tobillo y glúteo", category: "Bandas", photo: "/home/mini_bands.jpg" },
+  { id: "bench", name: "Banco", hint: "Plano o regulable", category: "Soporte", photo: "/home/bench.jpg" },
+  { id: "box", name: "Cajón o step", hint: "También vale un taburete estable", category: "Soporte", photo: "/home/box.jpg" },
+  { id: "chair", name: "Silla estable", hint: "Sin ruedas: fondos, apoyo, sentarse", category: "Soporte", photo: "/home/chair.jpg" },
+  { id: "pullup_bar", name: "Barra de dominadas", hint: "La de puerta vale", category: "Soporte", photo: "/home/pullup_bar.jpg" },
+  { id: "trx", name: "TRX o anillas", hint: "Ancladas a puerta o techo", category: "Soporte", photo: "/home/trx.jpg" },
+  { id: "mats", name: "Colchoneta", hint: "Suelo, core y movilidad", category: "Casa", photo: "/home/mats.jpg" },
+  { id: "backpack", name: "Mochila o maleta", hint: "Para cargar y pasear", category: "Casa", photo: "/home/backpack.jpg" },
+  { id: "wall", name: "Pared libre", hint: "Isométricos y pike push-up", category: "Casa", photo: "/home/wall.jpg" },
+  { id: "jump_rope", name: "Cuerda de saltar", hint: "Cardio corto en poco espacio", category: "Cardio", photo: "/home/jump_rope.jpg" },
+  { id: "bike", name: "Bici estática", hint: "Si la tienes en casa", category: "Cardio", photo: "/home/bike.jpg" },
 ];
 
 export const TYPICAL_HOME_DUMBBELL_IDS = [
@@ -167,7 +167,9 @@ const HOME_MOVE_OPTIONS: Record<PlanMove, { itemId: string; name: string }[]> = 
   ],
 };
 
-const FALLBACK: Record<Equipment, Record<PlanMove, string>> = {
+type HomeTraining = "full_gym" | "home_dumbbells" | "bodyweight";
+
+const FALLBACK: Record<HomeTraining, Record<PlanMove, string>> = {
   full_gym: {
     squat: "Sentadilla al cajón o al aire",
     hinge: "Good morning a peso corporal / puente",
@@ -228,16 +230,18 @@ const FALLBACK: Record<Equipment, Record<PlanMove, string>> = {
 };
 
 export function typicalHomeItems(equipment: Equipment) {
-  return equipment === "home_dumbbells"
-    ? [...TYPICAL_HOME_DUMBBELL_IDS]
-    : [...TYPICAL_HOME_BODYWEIGHT_IDS];
+  if (equipment === "home_dumbbells") return [...TYPICAL_HOME_DUMBBELL_IDS];
+  if (equipment === "bodyweight") return [...TYPICAL_HOME_BODYWEIGHT_IDS];
+  return [];
 }
 
 export function seedHomeItems(
   equipment: Equipment,
   current?: string[] | null
 ) {
-  if (equipment === "full_gym") return current ?? [];
+  if (equipment === "full_gym" || equipment === "coach" || equipment === "pilates") {
+    return [];
+  }
   if (current?.length) {
     if (equipment === "home_dumbbells" && !current.includes("dumbbells")) {
       return [...current, "dumbbells"];
@@ -252,8 +256,15 @@ export function pickHomeExercise(
   key: PlanMove,
   equipment: Equipment
 ): { name: string; notes?: string } {
+  if (equipment === "coach") {
+    return { name: "Pendiente del profesor" };
+  }
+  if (equipment === "pilates") {
+    return { name: "Cien modificado" };
+  }
+  const fallback = FALLBACK[equipment];
   if (!itemIds?.length) {
-    return { name: FALLBACK[equipment][key] };
+    return { name: fallback[key] };
   }
   const selected = new Set(itemIds);
   const match = HOME_MOVE_OPTIONS[key].find((option) =>
@@ -261,7 +272,7 @@ export function pickHomeExercise(
   );
   if (match) return { name: match.name };
   return {
-    name: FALLBACK[equipment][key],
+    name: fallback[key],
     notes: "Sin ese material: usamos una variante con lo que sí hay.",
   };
 }

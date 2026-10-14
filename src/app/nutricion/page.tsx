@@ -1,5 +1,7 @@
 import { NutritionView } from "@/components/nutrition-view";
+import { requireClient } from "@/lib/require-user";
 
-export default function NutricionPage() {
+export default async function NutricionPage() {
+  await requireClient();
   return <NutritionView />;
 }

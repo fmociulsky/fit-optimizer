@@ -1362,6 +1362,11 @@ const GUIDES = createGuides();
 
 const RULES: [RegExp, string][] = [
   [/bird-?dog|dead bug|diafragm/i, "bird_dog"],
+  [/cien modificado|cien en reformer|cien con banda|plancha pilates|teaser/i, "plank"],
+  [/puente de hombros|puente con pelota|puente con rodillo|clamshell|patada lateral|side kick/i, "glute_bridge"],
+  [/spine stretch|sirena|mermaid|roll down|roll up|gato-?camello|movilidad tor[aá]cica|push through|elephant|short box|swan|barril/i, "mobility"],
+  [/footwork/i, "squat"],
+  [/chest expansion|rowing back|pulling straps|washer woman/i, "pull_iso"],
   [/step-?up/i, "step_up"],
   [/hack squat|smith/i, "squat"],
   [/prensa/i, "squat_box"],

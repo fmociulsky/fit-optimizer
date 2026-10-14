@@ -1,7 +1,7 @@
 import { INTENSITY_LABEL, weekdayName } from "./labels";
 import { checkInDue, isoDate } from "./metrics";
 import { buildMindGuide } from "./mind";
-import { dateForWeekday, sessionOnDate } from "./schedule";
+import { dateForWeekday, sessionOnDate, workoutOnDate } from "./schedule";
 import type { AppState, CompletedSession, MealSlot } from "./types";
 import { MEAL_SLOT_LABEL } from "./weekly-menu";
 
@@ -92,8 +92,7 @@ export function calendarCells(
 ): CalendarCell[] {
   const cells = monthCells(year, month).map((date) => {
     const weekday = date.getDay();
-    const workout =
-      state.plan.weeklySplit.find((day) => day.weekday === weekday) ?? null;
+    const workout = workoutOnDate(state, date);
     const names = workout?.exercises.map((exercise) => exercise.name) ?? [];
     const session = workout
       ? sessionOnDate(state, workout.id, date)
@@ -134,8 +133,7 @@ export function buildAgendaDay(
   const weekday = day.getDay();
   const iso = isoDate(day);
   const isToday = sameLocalDay(day, now);
-  const workout =
-    state.plan.weeklySplit.find((item) => item.weekday === weekday) ?? null;
+  const workout = workoutOnDate(state, day);
   const menuDay = state.weeklyMenu?.days.find((item) => item.weekday === weekday);
   const mindGuide = state.mindPrefs
     ? buildMindGuide({
@@ -174,7 +172,7 @@ export function buildAgendaDay(
     tasks.push({
       id: `rest-${weekday}`,
       kind: "rest",
-      title: "Descanso de gym",
+      title: "Día de descanso",
       detail:
         "Sin sesión de fuerza. Un paseo corto si te apetece, y duerme como si el entreno de mañana importara.",
     });

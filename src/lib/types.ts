@@ -7,7 +7,12 @@ export type GoalType =
   | "strength"
   | "endurance"
   | "health";
-export type Equipment = "full_gym" | "home_dumbbells" | "bodyweight";
+export type Equipment =
+  | "full_gym"
+  | "home_dumbbells"
+  | "bodyweight"
+  | "pilates"
+  | "coach";
 export type Intensity = "low" | "moderate" | "high";
 export type FocusArea =
   | "full_body"
@@ -44,6 +49,7 @@ export interface Profile {
   equipment: Equipment;
   gymMachines?: string[];
   homeItems?: string[];
+  pilatesItems?: string[];
   weekdays: number[];
   sessionMinutes: number;
 }
@@ -83,6 +89,11 @@ export interface Adjustment {
   changes: string[];
 }
 
+export interface PlanSlice {
+  effectiveFrom: string;
+  weeklySplit: WorkoutDay[];
+}
+
 export interface Plan {
   id: string;
   createdAt: string;
@@ -93,8 +104,14 @@ export interface Plan {
   rationale: string[];
   warnings: string[];
   nutritionHints: string[];
+  coachNutrition?: string[];
+  loadedBy?: {
+    userId: string;
+    name: string;
+  };
   weeklyFocus: string;
   adjustments: Adjustment[];
+  effectiveFrom?: string;
 }
 
 export interface CheckIn {
@@ -209,9 +226,107 @@ export interface AppState {
   mindPrefs?: MindPrefs;
   mindLogs?: MindLog[];
   mealLogs?: MealLog[];
+  coachPlanRequestedAt?: string;
+  planHistory?: PlanSlice[];
 }
 
 export interface OnboardingDraft {
   profile: Profile;
   goal: Goal;
+}
+
+export interface PersistedUser {
+  state: AppState | null;
+  draft: OnboardingDraft | null;
+}
+
+export type AccountRole = "client" | "professional" | "studio";
+export type StudioMemberRole = "owner" | "teacher" | "client";
+
+export type CoachRequestStatus = "pending" | "loaded";
+
+export interface Account {
+  userId: string;
+  role: AccountRole;
+  name: string;
+  username: string | null;
+  code: string | null;
+  linkedProfessionalId: string | null;
+  linkedProfessionalCode: string | null;
+  studioRole: StudioMemberRole | null;
+}
+
+export type StudioKind = "pilates" | "gym";
+export type StudioInviteRole = "teacher" | "client";
+
+export function normalizeStudioKinds(
+  raw: unknown,
+  fallbackKind?: string
+): StudioKind[] {
+  const allowed: StudioKind[] = ["pilates", "gym"];
+  if (Array.isArray(raw)) {
+    const kinds = allowed.filter((kind) => raw.includes(kind));
+    if (kinds.length) return kinds;
+  }
+  if (fallbackKind === "gym") return ["gym"];
+  return ["pilates"];
+}
+
+export function studioHasKind(kinds: StudioKind[], kind: StudioKind) {
+  return kinds.includes(kind);
+}
+
+export function parseClientActivities(
+  raw: unknown,
+  studioKinds: StudioKind[]
+): StudioKind[] {
+  const allowed = studioKinds.length ? studioKinds : (["gym"] as StudioKind[]);
+  const picked = Array.isArray(raw)
+    ? allowed.filter((kind) => raw.includes(kind))
+    : [];
+  const unique: StudioKind[] = [];
+  for (const kind of picked) {
+    if (!unique.includes(kind)) unique.push(kind);
+  }
+  if (!unique.length) {
+    throw new Error("Elegí si hace gimnasio, pilates o ambos.");
+  }
+  return unique;
+}
+
+export function memberActivities(
+  raw: unknown,
+  studioKinds: StudioKind[]
+): StudioKind[] {
+  try {
+    return parseClientActivities(raw, studioKinds);
+  } catch {
+    return studioKinds.length ? [...studioKinds] : ["gym"];
+  }
+}
+
+export interface StudioDayHours {
+  weekday: number;
+  openFrom: string;
+  openTo: string;
+  gymCapacity?: number;
+  pilatesCapacity?: number;
+}
+
+export interface StudioHours {
+  dayHours: StudioDayHours[];
+}
+
+export interface Studio {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  kinds: StudioKind[];
+  code: string;
+  pilatesItems: string[];
+  gymMachines: string[];
+  dayHours: StudioDayHours[];
+  address: string;
+  phone: string;
+  capacityPerSlot: number;
 }

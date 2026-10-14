@@ -33,7 +33,9 @@ import {
   type AgendaTask,
   type CalendarCell,
 } from "@/lib/agenda";
+import { isHistoricalPlanDate } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
+import { isCoachPlanPending } from "@/lib/coach";
 
 const KIND_LABEL: Record<AgendaTask["kind"], string> = {
   train: "Entreno",
@@ -368,8 +370,16 @@ function DayCard({
 
 export function AgendaView() {
   const router = useRouter();
-  const { ready, state, logMeal, logMindPractice, logSession, unlogSession, toggleExercise } =
-    useAppStore();
+  const {
+    ready,
+    state,
+    account,
+    logMeal,
+    logMindPractice,
+    logSession,
+    unlogSession,
+    toggleExercise,
+  } = useAppStore();
   const [cursor, setCursor] = useState(() => localNoon(new Date()));
   const [selected, setSelected] = useState(() => localNoon(new Date()));
 
@@ -419,12 +429,24 @@ export function AgendaView() {
         </h1>
         <p className="mt-3 max-w-2xl text-muted-foreground">
           {firstName}, elige un día. Marca el entreno y cada ejercicio cuando
-          lo hagas. Hoy o un día que ya pasó.
+          lo hagas. Si tu profesor cambia el plan, lo ves desde ese día; los
+          anteriores se quedan con lo que tocaba entonces.
         </p>
+
+        {isCoachPlanPending(state) && (
+          <div className="mt-6 rounded-2xl border border-foreground/8 bg-card p-4 text-sm leading-relaxed text-muted-foreground">
+            El gimnasio te asigna el profesor. No hace falta un código.
+          </div>
+        )}
 
         {(!state.weeklyMenu || !state.mindPrefs) && (
           <div className="mt-6 space-y-2 rounded-2xl border border-primary/30 bg-primary/8 p-4 text-sm leading-relaxed">
-            {!state.weeklyMenu && (
+            {!state.weeklyMenu &&
+              !(
+                account?.role === "client" &&
+                account.studioRole === "client" &&
+                !(state.plan.coachNutrition?.length)
+              ) && (
               <p>
                 Aún no hay menú semanal.{" "}
                 <Link href="/nutricion" className="font-medium underline">
@@ -480,7 +502,9 @@ export function AgendaView() {
             )}
             {!isFutureDay(selected) && !selectedDay.isToday && (
               <p className="text-sm text-muted-foreground">
-                Puedes marcar el entreno de este día si ya lo hiciste.
+                {isHistoricalPlanDate(state, selected)
+                  ? "Este día muestra el plan que tenías entonces, con los ejercicios que marcaste."
+                  : "Puedes marcar el entreno de este día si ya lo hiciste."}
               </p>
             )}
             {selectedDay.isToday && (

@@ -11,8 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { GymMachinePicker } from "@/components/gym-machine-picker";
 import { HomeItemPicker } from "@/components/home-item-picker";
+import { PilatesItemPicker } from "@/components/pilates-item-picker";
 import { PlanWarning } from "@/components/plan-warning";
 import { useAppStore } from "@/components/app-provider";
+import { isCoachLed } from "@/lib/coach";
 import {
   EQUIPMENT_HINT,
   EQUIPMENT_LABEL,
@@ -31,6 +33,7 @@ import {
 } from "@/lib/labels";
 import { TYPICAL_GYM_MACHINE_IDS } from "@/lib/gym-machines";
 import { seedHomeItems } from "@/lib/home-items";
+import { seedPilatesItems, TYPICAL_PILATES_IDS } from "@/lib/pilates";
 import {
   ageFromBirthDate,
   birthDateBounds,
@@ -43,6 +46,7 @@ import {
   withComputedAge,
 } from "@/lib/metrics";
 import { PLAN_ACCEPTANCE_TEXT } from "@/lib/disclaimers";
+import { loadGooglePrefill } from "@/lib/google-prefill";
 import { cn } from "@/lib/utils";
 import type {
   Equipment,
@@ -64,6 +68,30 @@ const ALL_STEPS = [
   { id: 4, label: "Material" },
   { id: 5, label: "Objetivo" },
 ] as const;
+
+function hasKnownIdentity(profile: Pick<Profile, "name" | "birthDate" | "age">) {
+  if (profile.name.trim().length < 2) return false;
+  const birthDate =
+    profile.birthDate && parseLocalYmd(profile.birthDate)
+      ? profile.birthDate
+      : birthDateFromAge(profile.age);
+  const age = ageFromBirthDate(birthDate);
+  return Number.isFinite(age) && age >= 16 && age <= 85;
+}
+
+function withPreviousIdentity(base: Profile, previous: Profile): Profile {
+  const birthDate =
+    previous.birthDate && parseLocalYmd(previous.birthDate)
+      ? previous.birthDate
+      : birthDateFromAge(previous.age);
+  return {
+    ...base,
+    name: previous.name.trim() || base.name,
+    birthDate,
+    age: profileAge({ ...previous, birthDate }),
+    sex: previous.sex,
+  };
+}
 
 const MEDICAL_OPTIONS: MedicalFlag[] = [
   "none",
@@ -107,7 +135,8 @@ function ChoiceCard({
 
 export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
   const router = useRouter();
-  const { startPlan, rebuildPlan, ready, state } = useAppStore();
+  const { startPlan, rebuildPlan, ready, state, draft, saveDraft, account } =
+    useAppStore();
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<Profile>(defaultDraftProfile);
   const [goal, setGoal] = useState<Goal>({
@@ -121,48 +150,148 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
   const [medicalAck, setMedicalAck] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [fromGoogle, setFromGoogle] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  const visibleSteps = ALL_STEPS;
+  const visibleSteps = useMemo(
+    () =>
+      state && hasKnownIdentity(profile)
+        ? ALL_STEPS.filter((item) => item.id !== 0)
+        : [...ALL_STEPS],
+    [state, profile]
+  );
+
+  useEffect(() => {
+    if (!ready || !rearmar) return;
+    const studioStudent =
+      account?.role === "client" && account.studioRole === "client";
+    if (studioStudent || isCoachLed(state?.profile)) {
+      router.replace("/panel");
+    }
+  }, [account, ready, rearmar, router, state]);
 
   useEffect(() => {
     if (!ready || hydrated) return;
-    if (rearmar && state) {
-      setProfile({
-        ...state.profile,
-        homeItems: seedHomeItems(state.profile.equipment, state.profile.homeItems),
-        birthDate:
-          state.profile.birthDate && parseLocalYmd(state.profile.birthDate)
-            ? state.profile.birthDate
-            : birthDateFromAge(state.profile.age),
-        age: profileAge(state.profile),
-      });
-      setGoal({
-        ...state.goal,
-        focusAreas: state.goal.focusAreas?.length
-          ? state.goal.focusAreas
-          : ["full_body"],
-      });
-      setTargetOn(Boolean(state.goal.targetWeightKg));
-      if (
-        state.profile.medicalFlags.some((flag) =>
-          ["cardiac", "pregnancy", "recent_injury"].includes(flag)
-        )
-      ) {
-        setMedicalAck(true);
+    let cancelled = false;
+
+    async function hydrate() {
+      let nextProfile = defaultDraftProfile();
+      let nextGoal: Goal = {
+        horizon: "medium",
+        type: "health",
+        targetWeightKg: null,
+        notes: "",
+        focusAreas: ["full_body"],
+      };
+      let nextTargetOn = false;
+
+      if (rearmar && state) {
+        nextProfile = {
+          ...state.profile,
+          homeItems: seedHomeItems(
+            state.profile.equipment,
+            state.profile.homeItems
+          ),
+          pilatesItems: seedPilatesItems(
+            state.profile.equipment,
+            state.profile.pilatesItems
+          ),
+          birthDate:
+            state.profile.birthDate && parseLocalYmd(state.profile.birthDate)
+              ? state.profile.birthDate
+              : birthDateFromAge(state.profile.age),
+          age: profileAge(state.profile),
+        };
+        nextGoal = {
+          ...state.goal,
+          focusAreas: state.goal.focusAreas?.length
+            ? state.goal.focusAreas
+            : ["full_body"],
+        };
+        nextTargetOn = Boolean(state.goal.targetWeightKg);
+        if (
+          state.profile.medicalFlags.some((flag) =>
+            ["cardiac", "pregnancy", "recent_injury"].includes(flag)
+          )
+        ) {
+          setMedicalAck(true);
+        }
+        if (cancelled) return;
+        setProfile(nextProfile);
+        setGoal(nextGoal);
+        setTargetOn(nextTargetOn);
+        setStep(hasKnownIdentity(nextProfile) ? 1 : 0);
+        setHydrated(true);
+        return;
       }
+
+      if (draft) {
+        nextProfile = {
+          ...draft.profile,
+          homeItems: seedHomeItems(
+            draft.profile.equipment,
+            draft.profile.homeItems
+          ),
+          pilatesItems: seedPilatesItems(
+            draft.profile.equipment,
+            draft.profile.pilatesItems
+          ),
+          birthDate:
+            draft.profile.birthDate && parseLocalYmd(draft.profile.birthDate)
+              ? draft.profile.birthDate
+              : birthDateFromAge(draft.profile.age),
+          age: profileAge(draft.profile),
+        };
+        nextGoal = {
+          ...draft.goal,
+          focusAreas: draft.goal.focusAreas?.length
+            ? draft.goal.focusAreas
+            : ["full_body"],
+        };
+        nextTargetOn = Boolean(draft.goal.targetWeightKg);
+      }
+
+      if (state) {
+        nextProfile = withPreviousIdentity(nextProfile, state.profile);
+      }
+
+      const prefill = await loadGooglePrefill();
+      if (cancelled) return;
+      if (prefill.name || prefill.birthDate) {
+        const age = prefill.birthDate
+          ? ageFromBirthDate(prefill.birthDate)
+          : NaN;
+        setFromGoogle(prefill.fromGoogle);
+        nextProfile = {
+          ...nextProfile,
+          name: nextProfile.name.trim() || prefill.name,
+          birthDate: nextProfile.birthDate || prefill.birthDate,
+          age: Number.isFinite(age) ? age : nextProfile.age,
+        };
+      }
+
+      setProfile(nextProfile);
+      setGoal(nextGoal);
+      setTargetOn(nextTargetOn);
+      setStep(state && hasKnownIdentity(nextProfile) ? 1 : 0);
+      setHydrated(true);
     }
-    setHydrated(true);
-  }, [ready, rearmar, state, hydrated]);
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, rearmar, state, draft, hydrated]);
 
   const bmi = useMemo(
     () => calcBmi(profile.weightKg, profile.heightCm),
     [profile.weightKg, profile.heightCm]
   );
 
-  if (rearmar && !hydrated) {
+  if (!hydrated) {
     return (
       <p className="mx-auto w-full max-w-2xl px-4 py-16 text-muted-foreground">
-        Cargando tu plan actual…
+        {rearmar ? "Cargando tu plan actual…" : "Cargando tus datos…"}
       </p>
     );
   }
@@ -237,9 +366,14 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
       if (profile.weekdays.length < 2) return "Elige al menos 2 días.";
     }
     if (step === 4) {
+      if (profile.equipment === "coach") return null;
       if (profile.equipment === "full_gym") {
         if ((profile.gymMachines?.length ?? 0) < 4) {
           return "Marca al menos 4 máquinas o zonas (o el pack típico).";
+        }
+      } else if (profile.equipment === "pilates") {
+        if ((profile.pilatesItems?.length ?? 0) < 2) {
+          return "Marca al menos 2 elementos de pilates (o el pack habitual).";
         }
       } else if ((profile.homeItems?.length ?? 0) < 2) {
         return "Marca al menos 2 cosas que tengas en casa (o “lo habitual”).";
@@ -257,14 +391,19 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
   }
 
   function nextStepFrom(current: number) {
-    return current + 1;
+    const ids: number[] = visibleSteps.map((item) => item.id);
+    const index = ids.indexOf(current);
+    return ids[Math.min(Math.max(index, 0) + 1, ids.length - 1)];
   }
 
   function prevStepFrom(current: number) {
-    return current - 1;
+    const ids: number[] = visibleSteps.map((item) => item.id);
+    const index = ids.indexOf(current);
+    return ids[Math.max(index - 1, 0)];
   }
 
-  function next() {
+  async function next() {
+    if (busy) return;
     const problem = validateStep();
     if (problem) {
       setError(problem);
@@ -272,6 +411,13 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
     }
     setError(null);
     if (step !== 5) {
+      saveDraft({
+        profile: withComputedAge(profile),
+        goal: {
+          ...goal,
+          targetWeightKg: targetOn ? goal.targetWeightKg : null,
+        },
+      });
       setStep(nextStepFrom(step));
       return;
     }
@@ -280,16 +426,25 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
       targetWeightKg: targetOn ? goal.targetWeightKg : null,
     };
     const nextProfile = withComputedAge(profile);
-    const created =
-      rearmar && state
-        ? rebuildPlan(nextProfile, nextGoal)
-        : startPlan(nextProfile, nextGoal);
-    toast.success(
-      rearmar
-        ? `Plan rearmado (v${created.plan.version}). El historial se queda.`
-        : `Plan v${created.plan.version} listo para ${profile.name.split(" ")[0]}`
-    );
-    router.push("/panel");
+    setBusy(true);
+    try {
+      const created =
+        rearmar && state
+          ? await rebuildPlan(nextProfile, nextGoal)
+          : await startPlan(nextProfile, nextGoal);
+      toast.success(
+        nextProfile.equipment === "coach"
+          ? "Ficha lista. El gimnasio te asigna el profesor."
+          : rearmar
+            ? `Plan rearmado (v${created.plan.version}). El historial se queda.`
+            : `Plan v${created.plan.version} listo para ${profile.name.split(" ")[0]}`
+      );
+      router.push("/panel");
+    } catch {
+      setError("No se pudo guardar en la base de datos. Inténtalo de nuevo.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -300,7 +455,7 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
       )}
       onSubmit={(e) => {
         e.preventDefault();
-        next();
+        void next();
       }}
     >
       <p className="text-sm font-medium tracking-wide text-primary uppercase">
@@ -339,7 +494,9 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
               <p className="mt-3 text-muted-foreground">
                 {rearmar
                   ? "Cambia el material, las máquinas o el objetivo. Los check-ins y las sesiones hechas se quedan."
-                  : "El plan cambia si tienes 24 o 64 años. La edad la sacamos de tu fecha de nacimiento."}
+                  : fromGoogle
+                    ? "Si entraste con Google, rellenamos nombre y fecha cuando Google los comparte. Puedes cambiarlos."
+                    : "El plan cambia si tienes 24 o 64 años. La edad la sacamos de tu fecha de nacimiento."}
               </p>
             </header>
             <div className="space-y-2">
@@ -352,6 +509,11 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
                 className="h-11 text-base"
                 autoComplete="given-name"
               />
+              {fromGoogle && profile.name.trim() ? (
+                <p className="text-sm text-muted-foreground">
+                  Lo tomamos de tu cuenta de Google.
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="birthDate">Fecha de nacimiento</Label>
@@ -375,11 +537,14 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
               />
               {profile.birthDate && Number.isFinite(ageFromBirthDate(profile.birthDate)) ? (
                 <p className="text-sm text-muted-foreground">
-                  Hoy tienes {ageFromBirthDate(profile.birthDate)} años.
+                  Hoy tienes {ageFromBirthDate(profile.birthDate)} años
+                  {fromGoogle ? " · lo tomamos de Google" : ""}.
                 </p>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  La usamos para calcular tu edad y ajustar el plan.
+                  {fromGoogle
+                    ? "Google no compartió la fecha. Indícala para calcular tu edad."
+                    : "La usamos para calcular tu edad y ajustar el plan."}
                 </p>
               )}
             </div>
@@ -406,8 +571,9 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
                 Peso y altura.
               </h1>
               <p className="mt-3 text-muted-foreground">
-                Sirven para calcular el IMC y, si quieres, un peso objetivo más adelante.
-                No es un juicio: es un dato de partida.
+                {state && hasKnownIdentity(profile)
+                  ? `${profile.name.split(" ")[0]}, nombre y fecha de nacimiento ya los tenemos. El peso y la altura sirven para el IMC y, si quieres, un objetivo más adelante.`
+                  : "Sirven para calcular el IMC y, si quieres, un peso objetivo más adelante. No es un juicio: es un dato de partida."}
               </p>
             </header>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -528,7 +694,7 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
             </div>
             <div className="space-y-2">
               <Label>Material</Label>
-              <div className="grid gap-2 sm:grid-cols-3">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {(Object.keys(EQUIPMENT_LABEL) as Equipment[]).map((eq) => (
                   <ChoiceCard
                     key={eq}
@@ -544,6 +710,12 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
                             ? [...TYPICAL_GYM_MACHINE_IDS]
                             : p.gymMachines,
                         homeItems: seedHomeItems(eq, p.homeItems),
+                        pilatesItems: seedPilatesItems(
+                          eq,
+                          eq === "pilates" && !p.pilatesItems?.length
+                            ? [...TYPICAL_PILATES_IDS]
+                            : p.pilatesItems
+                        ),
                       }))
                     }
                   />
@@ -589,6 +761,20 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
           </section>
         )}
 
+        {step === 4 && profile.equipment === "coach" && (
+          <section className="space-y-6">
+            <header>
+              <h1 className="font-heading text-4xl tracking-tight italic sm:text-5xl">
+                Tu profesor te lo asigna el gimnasio.
+              </h1>
+              <p className="mt-3 text-muted-foreground">
+                El estudio vincula cada alumno con un profesor. No hace falta
+                un código. Nutrición y mente siguen en Enforma.
+              </p>
+            </header>
+          </section>
+        )}
+
         {step === 4 && profile.equipment === "full_gym" && (
           <section className="space-y-6">
             <header>
@@ -607,7 +793,29 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
           </section>
         )}
 
-        {step === 4 && profile.equipment !== "full_gym" && (
+        {step === 4 && profile.equipment === "pilates" && (
+          <section className="space-y-6">
+            <header>
+              <h1 className="font-heading text-4xl tracking-tight italic sm:text-5xl">
+                Qué usas en pilates.
+              </h1>
+              <p className="mt-3 text-muted-foreground">
+                Marca colchoneta, reformer, silla Wunda, aro o lo que tengas
+                de verdad. El plan se arma con eso; si falta un aparato, hay
+                variante de suelo.
+              </p>
+            </header>
+            <PilatesItemPicker
+              selected={profile.pilatesItems ?? []}
+              onChange={(ids) => update("pilatesItems", ids)}
+            />
+          </section>
+        )}
+
+        {step === 4 &&
+          profile.equipment !== "full_gym" &&
+          profile.equipment !== "coach" &&
+          profile.equipment !== "pilates" && (
           <section className="space-y-6">
             <header>
               <h1 className="font-heading text-4xl tracking-tight italic sm:text-5xl">
@@ -735,10 +943,15 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
         <Button
           type="button"
           variant="ghost"
+          disabled={busy}
           onClick={() => {
             setError(null);
-            if (step === 0) router.push(rearmar ? "/panel" : "/");
-            else setStep(prevStepFrom(step));
+            const firstVisible = visibleSteps[0]?.id ?? 0;
+            if (step === firstVisible) {
+              router.push(rearmar || state ? "/panel" : "/");
+              return;
+            }
+            setStep(prevStepFrom(step));
           }}
           className="h-11 px-4"
         >
@@ -748,16 +961,19 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
         <Button
           type="submit"
           className="h-11 px-5"
+          disabled={busy}
           onClick={(e) => {
             e.preventDefault();
-            next();
+            void next();
           }}
         >
-          {step === 5
-            ? rearmar
-              ? "Rearmar mi plan"
-              : "Armar mi plan"
-            : "Continuar"}
+          {busy
+            ? "Guardando…"
+            : step === 5
+              ? rearmar
+                ? "Rearmar mi plan"
+                : "Armar mi plan"
+              : "Continuar"}
           <ArrowRight data-icon="inline-end" />
         </Button>
       </div>

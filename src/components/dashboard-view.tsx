@@ -9,8 +9,10 @@ import {
   Apple,
   Brain,
   CalendarCheck,
+  CalendarClock,
   CalendarDays,
   CheckCircle2,
+  GraduationCap,
   Moon,
   RefreshCw,
 } from "lucide-react";
@@ -36,7 +38,9 @@ import {
 } from "@/lib/labels";
 import { gymMachineNames } from "@/lib/gym-machines";
 import { homeItemNames } from "@/lib/home-items";
+import { pilatesItemNames } from "@/lib/pilates";
 import { PLAN_ACCEPTANCE_TEXT } from "@/lib/disclaimers";
+import { isCoachLed, isCoachPlanPending } from "@/lib/coach";
 import {
   checkInDue,
   currentWeek,
@@ -51,12 +55,21 @@ import {
   todayWorkout,
   weekGrid,
 } from "@/lib/schedule";
+import { clientHomeHref } from "@/lib/roles";
+import { loadAssignedTeacherName } from "@/lib/studio";
 import { cn } from "@/lib/utils";
 
 function Score({ value }: { value: number }) {
   return (
     <span className="font-heading text-2xl italic tabular-nums">{value}/5</span>
   );
+}
+
+function weekDateLabel(date: Date) {
+  return new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short",
+  }).format(date);
 }
 
 function zonesLabel(areas?: (keyof typeof FOCUS_AREA_LABEL)[] | null) {
@@ -71,15 +84,70 @@ function zonesLabel(areas?: (keyof typeof FOCUS_AREA_LABEL)[] | null) {
 
 export function DashboardView() {
   const router = useRouter();
-  const { ready, state, logSession, reset, acceptPlanGuide } = useAppStore();
+  const { ready, state, logSession, reset, acceptPlanGuide, account } =
+    useAppStore();
   const [rpe, setRpe] = useState(7);
   const [acceptedNotice, setAcceptedNotice] = useState(false);
+  const [assignedTeacher, setAssignedTeacher] = useState<string | null>(null);
+
+  const studioStudent =
+    account?.role === "client" && account.studioRole === "client";
+  const savedTeacher = state?.plan.loadedBy?.name.trim() || null;
 
   useEffect(() => {
-    if (ready && !state) router.replace("/comenzar");
-  }, [ready, state, router]);
+    if (!ready || !studioStudent || savedTeacher) return;
+    let cancelled = false;
+    void loadAssignedTeacherName()
+      .then((name) => {
+        if (!cancelled) setAssignedTeacher(name);
+      })
+      .catch(() => {
+        if (!cancelled) setAssignedTeacher(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, savedTeacher, studioStudent]);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (state) return;
+    if (studioStudent) return;
+    router.replace(clientHomeHref(account));
+  }, [account, ready, router, state, studioStudent]);
 
   if (!ready || !state) {
+    if (ready && !state && studioStudent) {
+      return (
+        <div className="min-h-svh bg-background">
+          <SiteHeader />
+          <main className="mx-auto w-full max-w-3xl px-4 py-8">
+            <p className="text-sm font-medium tracking-wide text-primary uppercase">
+              Alumno
+            </p>
+            <h1 className="mt-1 font-heading text-4xl tracking-tight italic sm:text-5xl">
+              Tu plan.
+            </h1>
+            <p className="mt-3 max-w-xl text-muted-foreground">
+              Tu profesor todavía no cargó el plan. Cuando lo haga, las
+              sesiones aparecen acá.
+            </p>
+            <Link
+              href="/turnos"
+              className="mt-6 flex gap-3 rounded-2xl border border-foreground/8 bg-card p-4 transition-colors hover:border-primary/40"
+            >
+              <CalendarClock className="mt-0.5 size-5 shrink-0 text-primary" />
+              <div>
+                <p className="font-medium">Días de asistencia</p>
+                <p className="text-sm text-muted-foreground">
+                  Mientras tanto, podés elegir cuándo vas.
+                </p>
+              </div>
+            </Link>
+          </main>
+        </div>
+      );
+    }
     return (
       <div className="flex min-h-svh items-center justify-center text-muted-foreground">
         Cargando tu plan…
@@ -96,6 +164,14 @@ export function DashboardView() {
   const grid = weekGrid(state);
   const lastCheck = state.checkIns.at(-1);
   const firstName = state.profile.name.split(" ")[0];
+  const coachPending = isCoachPlanPending(state);
+  const coachLed = isCoachLed(state.profile);
+  const canReconfigure = !coachLed && !studioStudent;
+  const foodNotes = studioStudent
+    ? (state.plan.coachNutrition ?? [])
+    : state.plan.nutritionHints;
+  const showFood = !studioStudent || foodNotes.length > 0;
+  const planTeacher = savedTeacher || assignedTeacher;
 
   if (!state.planAcceptedAt) {
     return (
@@ -152,6 +228,15 @@ export function DashboardView() {
               {GOAL_LABEL[state.goal.type]} · {zonesLabel(state.goal.focusAreas)} ·{" "}
               {HORIZON_LABEL[state.goal.horizon]} · {currentWeight(state).toFixed(1)} kg
             </p>
+            {studioStudent && !coachPending && planTeacher && (
+              <p className="mt-3 flex items-center gap-2 text-sm">
+                <GraduationCap className="size-4 shrink-0 text-primary" />
+                <span>
+                  Plan cargado por{" "}
+                  <span className="font-medium">{planTeacher}</span>
+                </span>
+              </p>
+            )}
           </div>
           <CheckInDialog due={due} />
         </div>
@@ -184,9 +269,32 @@ export function DashboardView() {
           </p>
         )}
 
+        {account?.studioRole === "client" && (
+          <Link
+            href="/turnos"
+            className="mt-6 flex gap-3 rounded-2xl border border-foreground/8 bg-card p-4 transition-colors hover:border-primary/40"
+          >
+            <CalendarClock className="mt-0.5 size-5 shrink-0 text-primary" />
+            <div>
+              <p className="font-medium">Días de asistencia</p>
+              <p className="text-sm text-muted-foreground">
+                Elige cuándo vas, dentro de las veces por semana que te asignó
+                el gimnasio.
+              </p>
+            </div>
+          </Link>
+        )}
+
         <div className="mt-6">
           <PlanWarning compact />
         </div>
+
+        {coachPending && (
+          <div className="mt-6 rounded-2xl border border-foreground/8 bg-card p-4 text-sm leading-relaxed text-muted-foreground">
+            Tu profesor todavía no cargó el plan de ejercicios. Cuando lo haga,
+            las sesiones aparecen acá.
+          </div>
+        )}
 
         <Tabs defaultValue="hoy" className="mt-8">
           <TabsList className="w-full sm:w-auto">
@@ -200,7 +308,7 @@ export function DashboardView() {
             <p className="font-heading text-xl italic text-muted-foreground">
               {state.plan.weeklyFocus}
             </p>
-            {today ? (
+            {coachPending ? null : today ? (
               <WorkoutDayCard
                 day={today}
                 actions={
@@ -270,7 +378,9 @@ export function DashboardView() {
                   <div>
                     <p className="font-medium">Agenda de la semana</p>
                     <p className="text-sm text-muted-foreground">
-                      Todas las tareas, día a día: entreno, comidas y mente.
+                      {showFood
+                        ? "Todas las tareas, día a día: entreno, comidas y mente."
+                        : "Las sesiones, día a día."}
                     </p>
                   </div>
                 </div>
@@ -282,15 +392,15 @@ export function DashboardView() {
                 </Link>
               </CardContent>
             </Card>
+            {canReconfigure && (
             <Card>
               <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
                   <RefreshCw className="mt-0.5 size-5 shrink-0 text-primary" />
                   <div>
-                    <p className="font-medium">¿Cambiaste de sitio?</p>
+                    <p className="font-medium">¿Cambió dónde entrenas?</p>
                     <p className="text-sm text-muted-foreground">
-                      De casa a gimnasio, o al revés. Rearmamos ejercicios con el
-                      material nuevo y guardamos check-ins y sesiones.
+                      De casa a gimnasio, o al revés. Rearmamos ejercicios con el material nuevo y guardamos check-ins y sesiones.
                     </p>
                   </div>
                 </div>
@@ -302,6 +412,8 @@ export function DashboardView() {
                 </Link>
               </CardContent>
             </Card>
+            )}
+            {showFood && (
             <Card>
               <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
@@ -322,6 +434,7 @@ export function DashboardView() {
                 </Link>
               </CardContent>
             </Card>
+            )}
             <Card>
               <CardContent className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-start gap-3">
@@ -358,7 +471,7 @@ export function DashboardView() {
               </Link>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {grid.map(({ weekday, workout }) => (
+              {grid.map(({ weekday, date, workout }) => (
                 <div
                   key={weekday}
                   className={cn(
@@ -367,7 +480,12 @@ export function DashboardView() {
                   )}
                 >
                   <div className="flex items-center justify-between">
-                    <p className="font-medium">{weekdayName(weekday)}</p>
+                    <p className="font-medium">
+                      {weekdayName(weekday)}{" "}
+                      <span className="font-normal text-muted-foreground">
+                        {weekDateLabel(date)}
+                      </span>
+                    </p>
                     {workout ? (
                       <Badge variant="secondary">{workout.durationMin} min</Badge>
                     ) : (
@@ -381,14 +499,16 @@ export function DashboardView() {
               ))}
             </div>
             <div className="space-y-4">
-              {state.plan.weeklySplit.map((day) => (
-                <div key={day.id}>
-                  <p className="mb-2 text-sm font-medium text-muted-foreground">
-                    {weekdayShort(day.weekday)}
-                  </p>
-                  <WorkoutDayCard day={day} />
-                </div>
-              ))}
+              {grid.map(({ weekday, date, workout }) =>
+                workout ? (
+                  <div key={`${weekday}-${workout.id}`}>
+                    <p className="mb-2 text-sm font-medium text-muted-foreground">
+                      {weekdayShort(weekday)} {weekDateLabel(date)}
+                    </p>
+                    <WorkoutDayCard day={workout} />
+                  </div>
+                ) : null
+              )}
             </div>
           </TabsContent>
 
@@ -527,10 +647,25 @@ export function DashboardView() {
                   {gymMachineNames(state.profile.gymMachines).join(" · ")}
                 </p>
               )}
-              {state.profile.equipment !== "full_gym" && (
+              {state.profile.equipment === "pilates" && (
                 <p className="mt-2 text-sm">
-                  {homeItemNames(state.profile.homeItems).join(" · ") ||
-                    "Aún no marcaste lo de casa. Reconfigura el plan."}
+                  {pilatesItemNames(state.profile.pilatesItems).join(" · ") ||
+                    "Aún no marcaste el material de pilates. Reconfigura el plan."}
+                </p>
+              )}
+              {state.profile.equipment !== "full_gym" &&
+                state.profile.equipment !== "coach" &&
+                state.profile.equipment !== "pilates" && (
+                  <p className="mt-2 text-sm">
+                    {homeItemNames(state.profile.homeItems).join(" · ") ||
+                      "Aún no marcaste lo de casa. Reconfigura el plan."}
+                  </p>
+                )}
+              {coachLed && (
+                <p className="mt-2 text-sm">
+                  {planTeacher
+                    ? `Plan cargado por ${planTeacher}.`
+                    : "El plan físico lo carga tu profesor."}
                 </p>
               )}
             </div>
@@ -559,10 +694,11 @@ export function DashboardView() {
                 </ul>
               </div>
             )}
+            {showFood && (
             <div>
               <h2 className="font-heading text-2xl italic">Comida, en bruto</h2>
               <ul className="mt-3 list-disc space-y-2 pl-4 text-sm text-muted-foreground">
-                {state.plan.nutritionHints.map((n) => (
+                {foodNotes.map((n) => (
                   <li key={n}>{n}</li>
                 ))}
               </ul>
@@ -573,6 +709,8 @@ export function DashboardView() {
                 Abrir la guía de nutrición
               </Link>
             </div>
+            )}
+            {canReconfigure && (
             <div className="flex flex-col gap-3 sm:flex-row">
               <Link
                 href="/comenzar?modo=rearmar"
@@ -591,6 +729,7 @@ export function DashboardView() {
                 Borrar este plan y empezar otro
               </Button>
             </div>
+            )}
           </TabsContent>
         </Tabs>
       </main>

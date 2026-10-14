@@ -1,16 +1,93 @@
-import type { AppState, CompletedSession, WorkoutDay } from "./types";
-import { isoDate, jsWeekday } from "./metrics";
+import type { AppState, CompletedSession, PlanSlice, WorkoutDay } from "./types";
+import { isoDate, jsWeekday, toLocalYmd } from "./metrics";
+
+export function cloneWorkoutDays(days: WorkoutDay[]): WorkoutDay[] {
+  return days.map((day) => ({
+    ...day,
+    exercises: day.exercises.map((exercise) => ({ ...exercise })),
+  }));
+}
+
+function currentSplitStart(state: AppState) {
+  if (state.plan.effectiveFrom) return state.plan.effectiveFrom;
+  const loaded = [...state.plan.adjustments]
+    .reverse()
+    .find((item) => item.reason === "Plan cargado por el profesor");
+  if (loaded) return toLocalYmd(new Date(loaded.date));
+  return toLocalYmd(new Date(state.plan.createdAt));
+}
+
+export function splitForDate(state: AppState, date: Date): WorkoutDay[] {
+  const stamp = toLocalYmd(date);
+  const history = state.planHistory ?? [];
+  if (!state.plan.effectiveFrom && history.length === 0) {
+    return state.plan.weeklySplit;
+  }
+  const from = currentSplitStart(state);
+  if (stamp >= from) return state.plan.weeklySplit;
+  const slice = history
+    .filter((item) => item.effectiveFrom <= stamp)
+    .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom))
+    .at(-1);
+  return slice?.weeklySplit ?? [];
+}
+
+export function workoutOnDate(
+  state: AppState,
+  date = new Date()
+): WorkoutDay | null {
+  const weekday = jsWeekday(date);
+  return splitForDate(state, date).find((day) => day.weekday === weekday) ?? null;
+}
+
+export function isHistoricalPlanDate(state: AppState, date: Date) {
+  const history = state.planHistory ?? [];
+  if (!state.plan.effectiveFrom && history.length === 0) return false;
+  return toLocalYmd(date) < currentSplitStart(state);
+}
+
+export function replacePlanSplit(
+  state: AppState,
+  days: WorkoutDay[],
+  at = new Date()
+): { plan: AppState["plan"]; planHistory: PlanSlice[] } {
+  const today = toLocalYmd(at);
+  const prev = state.plan.weeklySplit;
+  const prevFrom = currentSplitStart(state);
+  let history = [...(state.planHistory ?? [])];
+  if (prev.length && prevFrom < today) {
+    const slice: PlanSlice = {
+      effectiveFrom: prevFrom,
+      weeklySplit: cloneWorkoutDays(prev),
+    };
+    const index = history.findIndex((item) => item.effectiveFrom === prevFrom);
+    if (index >= 0) history[index] = slice;
+    else history.push(slice);
+  }
+  return {
+    planHistory: history,
+    plan: {
+      ...state.plan,
+      weeklySplit: cloneWorkoutDays(days),
+      effectiveFrom: today,
+    },
+  };
+}
 
 export function todayWorkout(state: AppState, date = new Date()): WorkoutDay | null {
-  const weekday = jsWeekday(date);
-  return state.plan.weeklySplit.find((day) => day.weekday === weekday) ?? null;
+  return workoutOnDate(state, date);
 }
 
 export function sessionOnDate(state: AppState, dayId: string, date = new Date()) {
   const stamp = isoDate(date);
-  return state.sessions.find(
+  const exact = state.sessions.find(
     (s) => s.dayId === dayId && isoDate(new Date(s.date)) === stamp
   );
+  if (exact) return exact;
+  const sameDay = state.sessions.filter(
+    (s) => isoDate(new Date(s.date)) === stamp
+  );
+  return sameDay.length === 1 ? sameDay[0] : undefined;
 }
 
 export function startOfMonday(date = new Date()) {
@@ -40,10 +117,11 @@ export function sessionsThisWeek(state: AppState, date = new Date()) {
   });
 }
 
-export function weekGrid(state: AppState) {
+export function weekGrid(state: AppState, date = new Date()) {
   return [1, 2, 3, 4, 5, 6, 0].map((weekday) => ({
     weekday,
-    workout: state.plan.weeklySplit.find((d) => d.weekday === weekday) ?? null,
+    date: dateForWeekday(weekday, date),
+    workout: state.plan.weeklySplit.find((day) => day.weekday === weekday) ?? null,
   }));
 }
 

@@ -1,5 +1,7 @@
 import { AgendaView } from "@/components/agenda-view";
+import { requireClient } from "@/lib/require-user";
 
-export default function AgendaPage() {
+export default async function AgendaPage() {
+  await requireClient();
   return <AgendaView />;
 }

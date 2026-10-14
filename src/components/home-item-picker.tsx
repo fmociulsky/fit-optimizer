@@ -18,7 +18,7 @@ export function HomeItemPicker({
   onChange,
 }: {
   selected: string[];
-  equipment: Exclude<Equipment, "full_gym">;
+  equipment: Exclude<Equipment, "full_gym" | "coach" | "pilates">;
   onChange: (ids: string[]) => void;
 }) {
   const [category, setCategory] = useState<HomeCategory | "Todas">("Todas");

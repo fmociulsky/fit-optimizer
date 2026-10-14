@@ -6,13 +6,19 @@ import { usePathname } from "next/navigation";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import {
   Brain,
+  Building2,
   CalendarCheck,
+  CalendarClock,
   CalendarDays,
   Dumbbell,
-  Home,
+  GraduationCap,
+  MapPin,
   Menu,
   RefreshCw,
   Sparkles,
+  UserRound,
+  UserPlus,
+  Users,
   UtensilsCrossed,
   X,
 } from "lucide-react";
@@ -23,17 +29,27 @@ import {
   DialogPortal,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Show, UserButton } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/components/app-provider";
+import { isCoachLed } from "@/lib/coach";
+import { clientHomeHref } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
 export function SiteHeader({ compact = false }: { compact?: boolean }) {
   const pathname = usePathname();
-  const { ready, state } = useAppStore();
+  const { ready, state, account, logoutDemo } = useAppStore();
   const [open, setOpen] = useState(false);
   const [rearmar, setRearmar] = useState(false);
   const hasPlan = ready && Boolean(state);
-  const firstName = state?.profile.name.split(" ")[0];
+  const isPro = account?.role === "professional";
+  const isStudio = account?.role === "studio";
+  const isStudioClient = account?.role === "client" && account.studioRole === "client";
+  const canReconfigure = hasPlan && !isStudioClient && !isCoachLed(state?.profile);
+  const isLocalSession = Boolean(
+    account?.userId && !account.userId.startsWith("user_")
+  );
+  const firstName = state?.profile.name.split(" ")[0] || account?.name.split(" ")[0];
 
   useEffect(() => {
     setOpen(false);
@@ -57,12 +73,45 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
         >
           <Menu />
         </Button>
-        <Link href="/" className="flex items-center gap-2 font-medium tracking-tight">
+        <Link
+          href={
+            account ? clientHomeHref(account, hasPlan) : "/"
+          }
+          className="flex items-center gap-2 font-medium tracking-tight"
+        >
           <span className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
             <Dumbbell className="size-4" />
           </span>
           <span className="font-heading text-lg italic">Enforma</span>
         </Link>
+        <div className="ml-auto flex items-center gap-2">
+          <Show when="signed-in">
+            <UserButton />
+          </Show>
+          <Show when="signed-out">
+            {isLocalSession ? (
+              <>
+                {account?.username ? (
+                  <span className="max-w-36 truncate text-sm text-muted-foreground">
+                    {account.username}
+                  </span>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 px-3"
+                  onClick={() => {
+                    void logoutDemo().then(() => {
+                      window.location.href = "/";
+                    });
+                  }}
+                >
+                  Salir
+                </Button>
+              </>
+            ) : null}
+          </Show>
+        </div>
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -101,14 +150,146 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
             </div>
 
             <nav className="mt-6 flex flex-1 flex-col gap-1">
+              {!account ? (
+                <>
+                  <MenuLink
+                    href="/entrar-estudio"
+                    active={pathname.startsWith("/entrar-estudio")}
+                    icon={Building2}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Estudio
+                  </MenuLink>
+                  <MenuLink
+                    href="/entrar-profesor"
+                    active={pathname.startsWith("/entrar-profesor")}
+                    icon={GraduationCap}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Profesor
+                  </MenuLink>
+                  <MenuLink
+                    href="/entrar-usuario"
+                    active={pathname.startsWith("/entrar-usuario")}
+                    icon={Users}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Alumno
+                  </MenuLink>
+                </>
+              ) : isStudio ? (
+                <>
+                  <MenuLink
+                    href="/estudio"
+                    active={
+                      pathname === "/estudio" ||
+                      (pathname.startsWith("/estudio/") &&
+                        !pathname.startsWith("/estudio/profesores") &&
+                        !pathname.startsWith("/estudio/alumnos"))
+                    }
+                    icon={Building2}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Gimnasio
+                  </MenuLink>
+                  <MenuLink
+                    href="/estudio/profesores"
+                    active={
+                      pathname === "/estudio/profesores" ||
+                      pathname.startsWith("/estudio/profesores/")
+                    }
+                    icon={GraduationCap}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Profesores
+                  </MenuLink>
+                  <MenuLink
+                    href="/estudio/alumnos"
+                    active={
+                      pathname === "/estudio/alumnos" ||
+                      pathname.startsWith("/estudio/alumnos/")
+                    }
+                    icon={Users}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Alumnos
+                  </MenuLink>
+                </>
+              ) : isPro ? (
+                <>
+                  <MenuLink
+                    href="/profesor"
+                    active={pathname === "/profesor"}
+                    icon={CalendarDays}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Agenda
+                  </MenuLink>
+                  <MenuLink
+                    href="/profesor/alumnos"
+                    active={
+                      pathname === "/profesor/alumnos" ||
+                      (pathname.startsWith("/profesor/") &&
+                        !pathname.startsWith("/profesor/sucursales") &&
+                        pathname !== "/profesor")
+                    }
+                    icon={GraduationCap}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Alumnos
+                  </MenuLink>
+                  <MenuLink
+                    href="/profesor/sucursales"
+                    active={
+                      pathname === "/profesor/sucursales" ||
+                      pathname.startsWith("/profesor/sucursales/")
+                    }
+                    icon={MapPin}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Sucursales
+                  </MenuLink>
+                </>
+              ) : (
+                <>
+              {isStudioClient && (
+                <>
+                <MenuLink
+                  href="/panel"
+                  active={pathname === "/panel"}
+                  icon={CalendarCheck}
+                  onNavigate={() => setOpen(false)}
+                >
+                  Mi plan
+                </MenuLink>
+                <MenuLink
+                  href="/turnos"
+                  active={pathname === "/turnos"}
+                  icon={CalendarClock}
+                  onNavigate={() => setOpen(false)}
+                >
+                  Agenda
+                </MenuLink>
+                <MenuLink
+                  href="/datos"
+                  active={pathname === "/datos"}
+                  icon={UserRound}
+                  onNavigate={() => setOpen(false)}
+                >
+                  Datos personales
+                </MenuLink>
+                </>
+              )}
+              {!isStudioClient && (
+                <>
               <MenuLink
-                href="/"
-                active={pathname === "/"}
-                icon={Home}
-                onNavigate={() => setOpen(false)}
-              >
-                Inicio
-              </MenuLink>
+                  href="/unirse"
+                  active={pathname === "/unirse"}
+                  icon={UserPlus}
+                  onNavigate={() => setOpen(false)}
+                >
+                  Unirme a un gimnasio
+                </MenuLink>
               {hasPlan && (
                 <MenuLink
                   href="/panel"
@@ -149,7 +330,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   Mente
                 </MenuLink>
               )}
-              {hasPlan && (
+              {canReconfigure && (
                 <MenuLink
                   href="/comenzar?modo=rearmar"
                   active={rearmar}
@@ -165,8 +346,12 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                 icon={Sparkles}
                 onNavigate={() => setOpen(false)}
               >
-                {hasPlan ? "Nuevo plan" : "Empezar mi plan"}
+                {hasPlan ? "Nuevo plan" : "Plan personal"}
               </MenuLink>
+                </>
+              )}
+                </>
+              )}
             </nav>
           </DialogPrimitive.Popup>
         </DialogPortal>
@@ -184,7 +369,7 @@ function MenuLink({
 }: {
   href: string;
   active: boolean;
-  icon: typeof Home;
+  icon: typeof CalendarDays;
   onNavigate: () => void;
   children: ReactNode;
 }) {

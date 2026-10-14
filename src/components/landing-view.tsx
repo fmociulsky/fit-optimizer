@@ -1,88 +1,58 @@
-"use client";
-
 import Link from "next/link";
-import { ArrowRight, HeartPulse, Target, TimerReset } from "lucide-react";
+import { Building2, GraduationCap, Users } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
-import { buttonVariants } from "@/components/ui/button";
-import { useAppStore } from "@/components/app-provider";
-import { cn } from "@/lib/utils";
 
-const STEPS = [
+const ENTRIES = [
   {
-    icon: Target,
-    title: "Objetivo con fecha",
-    text: "Corto (6 semanas), mediano (16) o largo (36). El horizonte cambia el ritmo, no solo el calendario.",
+    href: "/entrar-estudio",
+    icon: Building2,
+    title: "Estudio",
+    text: "Ingresar como estudio",
   },
   {
-    icon: HeartPulse,
-    title: "Tu cuerpo, no una plantilla",
-    text: "Edad, peso, altura, experiencia, material y antecedentes. El plan se recorta donde hace falta.",
+    href: "/entrar-profesor",
+    icon: GraduationCap,
+    title: "Profesor",
+    text: "Ingresar como profesor",
   },
   {
-    icon: TimerReset,
-    title: "Check-in y reajuste",
-    text: "Cada semana te pedimos peso, energía, sueño y molestias. Si algo no cuadra, el plan se mueve.",
+    href: "/entrar-usuario",
+    icon: Users,
+    title: "Alumno",
+    text: "Ingresar como alumno",
   },
 ];
 
 export function LandingView() {
-  const { ready, state } = useAppStore();
-  const hasPlan = ready && Boolean(state);
-
   return (
     <div className="min-h-svh bg-background">
-      <SiteHeader compact={!hasPlan} />
-      <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pb-16 pt-10 sm:pt-16">
+      <SiteHeader />
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-12 sm:py-20">
         <p className="text-sm font-medium tracking-wide text-primary uppercase">
-          Entrenamiento con seguimiento
+          Enforma
         </p>
-        <h1 className="mt-4 max-w-3xl font-heading text-5xl leading-[1.05] tracking-tight italic sm:text-7xl">
-          Di tu meta. Te armamos el plan.
+        <h1 className="mt-3 font-heading text-5xl tracking-tight italic sm:text-6xl">
+          Elegí cómo entrar.
         </h1>
-        <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
-          Corto, mediano o largo plazo. Con tu edad, peso, altura y
-          antecedentes. Y un seguimiento que pregunta de verdad para
-          reajustar, no para llenar una gráfica.
-        </p>
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          <Link
-            href={hasPlan ? "/panel" : "/comenzar"}
-            className={cn(buttonVariants(), "h-12 px-6 text-base")}
-          >
-            {hasPlan ? "Seguir mi plan" : "Empezar mi plan"}
-            <ArrowRight data-icon="inline-end" />
-          </Link>
-          {hasPlan && (
+        <div className="mt-10 grid gap-3 sm:grid-cols-3">
+          {ENTRIES.map((entry) => (
             <Link
-              href="/comenzar"
-              className={cn(buttonVariants({ variant: "outline" }), "h-12 px-6 text-base")}
+              key={entry.href}
+              href={entry.href}
+              className="flex min-h-40 flex-col justify-between rounded-3xl border border-foreground/8 bg-card p-5 transition-colors hover:border-primary/40"
             >
-              Armar uno nuevo
+              <entry.icon className="size-5 text-primary" />
+              <span>
+                <span className="block font-heading text-3xl italic">
+                  {entry.title}
+                </span>
+                <span className="mt-1 block text-sm text-muted-foreground">
+                  {entry.text}
+                </span>
+              </span>
             </Link>
-          )}
-        </div>
-
-        <div className="mt-16 grid gap-4 sm:grid-cols-3">
-          {STEPS.map((step) => (
-            <article
-              key={step.title}
-              className="rounded-3xl border border-foreground/8 bg-card p-5"
-            >
-              <step.icon className="size-5 text-primary" />
-              <h2 className="mt-4 font-heading text-2xl italic">{step.title}</h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {step.text}
-              </p>
-            </article>
           ))}
         </div>
-
-        <p className="mt-16 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          Enforma es una guía orientativa. El plan de entrenamiento debe ir
-          asistido por un profesional de la salud o del ejercicio: no es un
-          diagnóstico ni una prescripción. Si tienes antecedentes cardíacos,
-          lesión, embarazo o cualquier condición, consulta antes de empezar.
-        </p>
       </main>
     </div>
   );
