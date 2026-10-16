@@ -2069,8 +2069,7 @@ export async function loadGymRevenueStats(
     const ends = (member.serviceEndsOn ?? "").trim();
     const pending =
       member.paymentStatus === "overdue" ||
-      (!ends && member.paymentStatus === "overdue") ||
-      (ends &&
+      (Boolean(ends) &&
         (ends < today ||
           (ends >= `${thisMonthKey}-01` && ends <= monthEnd)));
     if (!pending) return sum;
