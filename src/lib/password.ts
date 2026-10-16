@@ -1,5 +1,8 @@
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
+import { passwordClientError } from "@/lib/password-rules";
+
+export { PASSWORD_HINT, passwordClientError } from "@/lib/password-rules";
 
 const scryptAsync = promisify(scrypt);
 const RESERVED = new Set(["1234", "1111", "2222"]);
@@ -31,8 +34,8 @@ export function usernameFromEmail(email: string) {
 }
 
 export function parsePassword(raw: string) {
-  if (raw.length < 4) throw new Error("La contraseña tiene que tener al menos 4 caracteres.");
-  if (raw.length > 72) throw new Error("La contraseña es demasiado larga.");
+  const error = passwordClientError(raw);
+  if (error) throw new Error(error);
   return raw;
 }
 

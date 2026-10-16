@@ -13,6 +13,8 @@ import type {
   PersistedUser,
   StudioDayHours,
   StudioInviteRole,
+  ClientPaymentStatus,
+  Sex,
   StudioKind,
   StudioMemberRole,
 } from "@/lib/types";
@@ -109,6 +111,15 @@ export const studioMemberships = pgTable(
     email: text("email").notNull().default(""),
     birthDate: text("birth_date").notNull().default(""),
     activities: jsonb("activities").$type<StudioKind[]>().notNull().default(["gym"]),
+    paymentStatus: text("payment_status")
+      .$type<ClientPaymentStatus>()
+      .notNull()
+      .default("current"),
+    serviceEndsOn: text("service_ends_on").notNull().default(""),
+    lastPaidOn: text("last_paid_on").notNull().default(""),
+    planName: text("plan_name").notNull().default(""),
+    feeAmount: integer("fee_amount"),
+    billingNotes: text("billing_notes").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -149,6 +160,7 @@ export const gymTeachers = pgTable(
     userId: text("user_id").notNull(),
     displayName: text("display_name").notNull(),
     phone: text("phone").notNull().default(""),
+    sex: text("sex").$type<Sex>().notNull().default("other"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -200,5 +212,27 @@ export const studioReservations = pgTable(
       table.weekday,
       table.slotStart
     ),
+  ]
+);
+
+/** Cobros registrados de alumnos (para estadísticas de ingresos). */
+export const studioPayments = pgTable(
+  "studio_payments",
+  {
+    id: text("id").primaryKey(),
+    studioId: text("studio_id").notNull(),
+    clientUserId: text("client_user_id").notNull(),
+    amount: integer("amount").notNull(),
+    paidOn: text("paid_on").notNull(),
+    planName: text("plan_name").notNull().default(""),
+    note: text("note").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("studio_payments_studio_idx").on(table.studioId),
+    index("studio_payments_paid_on_idx").on(table.paidOn),
+    index("studio_payments_client_idx").on(table.clientUserId),
   ]
 );

@@ -13,7 +13,7 @@ import { TeacherHoursEditor } from "@/components/teacher-hours-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { WEEKDAYS } from "@/lib/labels";
+import { SEX_LABEL, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
 import {
   assignGymTeacher,
@@ -23,9 +23,12 @@ import {
   loadGymTeacher,
   saveGymTeacherShifts,
   unassignGymTeacher,
+  updateGymTeacher,
   type GymTeacherDetail,
   type GymTeacherSummary,
 } from "@/lib/studio";
+import type { Sex } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const fieldClass =
   "h-11 w-full rounded-lg border border-input bg-transparent px-2.5 text-base md:text-sm";
@@ -60,6 +63,7 @@ export function GymTeachersView() {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [username, setUsername] = useState("");
+  const [sex, setSex] = useState<Sex | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -77,6 +81,10 @@ export function GymTeachersView() {
   }, []);
 
   async function createTeacher() {
+    if (!sex) {
+      toast.error("Elegí el género del profesor.");
+      return;
+    }
     setBusy(true);
     try {
       const teacher = await createGymTeacher({
@@ -84,6 +92,7 @@ export function GymTeachersView() {
         phone,
         username,
         password: "1234",
+        sex,
       });
       toast.success("Profesor creado.");
       setCreating(false);
@@ -183,6 +192,26 @@ export function GymTeachersView() {
                   onChange={(event) => setUsername(event.target.value)}
                 />
               </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Género</Label>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {(Object.keys(SEX_LABEL) as Sex[]).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setSex(option)}
+                      className={cn(
+                        "rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors",
+                        sex === option
+                          ? "border-primary bg-primary/8 ring-1 ring-primary"
+                          : "border-border bg-background hover:border-primary/40"
+                      )}
+                    >
+                      {SEX_LABEL[option]}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <Button
               className="mt-3 h-11 px-5"
@@ -234,6 +263,7 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
   const [loadError, setLoadError] = useState("");
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sexBusy, setSexBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -338,6 +368,42 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
               Usuario {teacher.username}
             </p>
           ) : null}
+          <div className="mt-4 max-w-lg space-y-1.5">
+            <Label>Género</Label>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(Object.keys(SEX_LABEL) as Sex[]).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  disabled={sexBusy}
+                  onClick={() => {
+                    if (option === teacher.sex) return;
+                    setSexBusy(true);
+                    void updateGymTeacher({
+                      teacherUserId: teacher.userId,
+                      sex: option,
+                    })
+                      .then((next) => {
+                        apply(next);
+                        toast.success("Género actualizado.");
+                      })
+                      .catch((error: unknown) => {
+                        toast.error(errorMessage(error));
+                      })
+                      .finally(() => setSexBusy(false));
+                  }}
+                  className={cn(
+                    "rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors disabled:opacity-60",
+                    teacher.sex === option
+                      ? "border-primary bg-primary/8 ring-1 ring-primary"
+                      : "border-border bg-card hover:border-primary/40"
+                  )}
+                >
+                  {SEX_LABEL[option]}
+                </button>
+              ))}
+            </div>
+          </div>
         </header>
 
         <section>

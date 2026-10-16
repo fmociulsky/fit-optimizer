@@ -8,6 +8,7 @@ import {
   gymTeachers,
   studioInvites,
   studioMemberships,
+  studioPayments,
   studioReservations,
   studioTeacherShifts,
   studios,
@@ -38,17 +39,31 @@ import {
 import { getSessionUserId } from "@/lib/session";
 import { planHasExercises } from "@/lib/coach";
 import {
+  clientAccountAlert,
+  parseClientBillingPlan,
+  renewBillingPeriod,
+  serviceEndsFromStart,
+  shiftYmd,
+  todayBillingYmd,
+  type ClientAccountAlert,
+} from "@/lib/client-account";
+import {
   memberActivities,
   normalizeStudioKinds,
   parseClientActivities,
   studioHasKind,
   type AppState,
+  type ClientBillingPlan,
+  type ClientPaymentStatus,
+  type Sex,
   type Studio,
   type StudioDayHours,
   type StudioInviteRole,
   type StudioKind,
   type StudioMemberRole,
 } from "@/lib/types";
+
+export type { ClientAccountAlert };
 
 async function requireUserId() {
   const userId = await getSessionUserId();
@@ -201,6 +216,40 @@ function parseBirthDate(raw: string) {
   return value;
 }
 
+function parseOptionalYmd(raw: string, label: string) {
+  const value = raw.trim();
+  if (!value) return "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`Pon una fecha válida en ${label}.`);
+  }
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Pon una fecha válida en ${label}.`);
+  }
+  return value;
+}
+
+function parsePaymentStatus(raw: string): ClientPaymentStatus {
+  if (
+    raw === "current" ||
+    raw === "overdue" ||
+    raw === "paused" ||
+    raw === "trial" ||
+    raw === "comp"
+  ) {
+    return raw;
+  }
+  throw new Error("Elegí un estado de cuenta.");
+}
+
+function parseFeeAmount(raw: number | null | undefined) {
+  if (raw === null || raw === undefined || Number.isNaN(raw)) return null;
+  const n = Math.round(raw);
+  if (n < 0) throw new Error("El monto no puede ser negativo.");
+  if (n > 99_999_999) throw new Error("El monto es demasiado alto.");
+  return n;
+}
+
 async function createTeacherAccount(input: {
   displayName: string;
   username: string;
@@ -298,7 +347,9 @@ async function upsertGymTeacher(input: {
   userId: string;
   displayName: string;
   phone: string;
+  sex?: Sex;
 }) {
+  const sex = input.sex ?? "other";
   await getDb()
     .insert(gymTeachers)
     .values({
@@ -307,6 +358,7 @@ async function upsertGymTeacher(input: {
       userId: input.userId,
       displayName: input.displayName,
       phone: input.phone,
+      sex,
       createdAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -314,6 +366,7 @@ async function upsertGymTeacher(input: {
       set: {
         displayName: input.displayName,
         phone: input.phone,
+        ...(input.sex ? { sex: input.sex } : {}),
       },
     });
 }
@@ -1143,6 +1196,12 @@ export async function createStudioInvite(input: {
   return { code, ...dashboard };
 }
 
+function parseBillingPlan(raw: string): ClientBillingPlan {
+  const plan = parseClientBillingPlan(raw);
+  if (!plan) throw new Error("Elegí un plan: mensual, trimestral o anual.");
+  return plan;
+}
+
 export async function createStudioClient(input: {
   studioId: string;
   displayName: string;
@@ -1153,6 +1212,8 @@ export async function createStudioClient(input: {
   sessionsPerWeek: number;
   teacherUserId: string;
   picks: { weekday: number; slotStart: string }[];
+  billingPlan: ClientBillingPlan;
+  serviceStartsOn: string;
 }) {
   const { studio } = await requireStudioOwner(input.studioId);
   const displayName = input.displayName.trim();
@@ -1165,6 +1226,13 @@ export async function createStudioClient(input: {
   if (sessionsPerWeek < 1 || sessionsPerWeek > 6) {
     throw new Error("Las veces por semana van de 1 a 6.");
   }
+  const billingPlan = parseBillingPlan(input.billingPlan);
+  const serviceStartsOn = parseOptionalYmd(
+    input.serviceStartsOn,
+    "día de inicio"
+  );
+  if (!serviceStartsOn) throw new Error("Pon el día de inicio del plan.");
+  const serviceEndsOn = serviceEndsFromStart(serviceStartsOn, billingPlan);
   const teacherUserId = await requireStudioTeacher(
     studio.id,
     input.teacherUserId
@@ -1195,6 +1263,10 @@ export async function createStudioClient(input: {
     email,
     birthDate,
     activities,
+    paymentStatus: "current",
+    planName: billingPlan,
+    lastPaidOn: serviceStartsOn,
+    serviceEndsOn,
     createdAt: new Date(),
   });
   if (reservationRows.length) {
@@ -1478,17 +1550,564 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "es"));
 }
 
+export type GymClientAccount = {
+  userId: string;
+  displayName: string;
+  email: string;
+  phone: string;
+  studioId: string;
+  studioName: string;
+  teacherName: string | null;
+  paymentStatus: ClientPaymentStatus;
+  serviceEndsOn: string;
+  lastPaidOn: string;
+  planName: string;
+  feeAmount: number | null;
+  billingNotes: string;
+  alert: ClientAccountAlert;
+};
+
+export async function listGymClientAccounts(): Promise<GymClientAccount[]> {
+  const { branches } = await requireOwnedGym();
+  if (!branches.length) return [];
+  const studioIds = branches.map((item) => item.id);
+  const db = getDb();
+  const members = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        inArray(studioMemberships.studioId, studioIds),
+        eq(studioMemberships.role, "client")
+      )
+    );
+  if (!members.length) return [];
+  const teachers = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        inArray(studioMemberships.studioId, studioIds),
+        eq(studioMemberships.role, "teacher")
+      )
+    );
+  const teacherNameByKey = new Map(
+    teachers.map(
+      (item) => [`${item.studioId}:${item.userId}`, item.displayName] as const
+    )
+  );
+  const studioNameById = new Map(branches.map((item) => [item.id, item.name]));
+  return members
+    .map((item) => {
+      const paymentStatus =
+        item.paymentStatus === "current" ||
+        item.paymentStatus === "overdue" ||
+        item.paymentStatus === "paused" ||
+        item.paymentStatus === "trial" ||
+        item.paymentStatus === "comp"
+          ? item.paymentStatus
+          : ("current" as const);
+      const serviceEndsOn = item.serviceEndsOn ?? "";
+      return {
+        userId: item.userId,
+        displayName: item.displayName,
+        email: item.email ?? "",
+        phone: item.phone ?? "",
+        studioId: item.studioId,
+        studioName: studioNameById.get(item.studioId) ?? "Sucursal",
+        teacherName: item.assignedTeacherUserId
+          ? (teacherNameByKey.get(
+              `${item.studioId}:${item.assignedTeacherUserId}`
+            ) ?? null)
+          : null,
+        paymentStatus,
+        serviceEndsOn,
+        lastPaidOn: item.lastPaidOn ?? "",
+        planName: item.planName ?? "",
+        feeAmount: item.feeAmount ?? null,
+        billingNotes: item.billingNotes ?? "",
+        alert: clientAccountAlert(paymentStatus, serviceEndsOn),
+      };
+    })
+    .sort((a, b) => {
+      const rank = (row: GymClientAccount) => {
+        if (row.paymentStatus === "overdue" || row.alert === "expired") return 0;
+        if (row.alert === "due_soon") return 1;
+        if (row.paymentStatus === "paused") return 2;
+        return 3;
+      };
+      return (
+        rank(a) - rank(b) ||
+        a.displayName.localeCompare(b.displayName, "es")
+      );
+    });
+}
+
+async function loadOwnedClientMember(studioId: string, clientUserId: string) {
+  const { studio } = await requireStudioOwner(studioId);
+  const [member] = await getDb()
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        eq(studioMemberships.studioId, studio.id),
+        eq(studioMemberships.userId, clientUserId.trim()),
+        eq(studioMemberships.role, "client")
+      )
+    )
+    .limit(1);
+  if (!member) throw new Error("Ese alumno no está en esta sucursal.");
+  return { studio, member };
+}
+
+async function recordStudioPayment(input: {
+  studioId: string;
+  clientUserId: string;
+  amount: number;
+  paidOn: string;
+  planName?: string;
+  note?: string;
+}) {
+  if (!input.amount || input.amount <= 0) return;
+  const paidOn = parseOptionalYmd(input.paidOn, "pago");
+  if (!paidOn) return;
+  await getDb().insert(studioPayments).values({
+    id: uid(),
+    studioId: input.studioId,
+    clientUserId: input.clientUserId,
+    amount: Math.round(input.amount),
+    paidOn,
+    planName: (input.planName ?? "").trim().slice(0, 80),
+    note: (input.note ?? "").trim().slice(0, 200),
+    createdAt: new Date(),
+  });
+}
+
+export async function updateGymClientAccount(input: {
+  studioId: string;
+  clientUserId: string;
+  paymentStatus: ClientPaymentStatus;
+  serviceEndsOn: string;
+  lastPaidOn: string;
+  planName: string;
+  feeAmount: number | null;
+  billingNotes: string;
+}) {
+  const { studio, member } = await loadOwnedClientMember(
+    input.studioId,
+    input.clientUserId
+  );
+  const paymentStatus = parsePaymentStatus(input.paymentStatus);
+  const serviceEndsOn = parseOptionalYmd(input.serviceEndsOn, "vencimiento");
+  const lastPaidOn = parseOptionalYmd(input.lastPaidOn, "último pago");
+  const planName = input.planName.trim().slice(0, 80);
+  const feeAmount = parseFeeAmount(input.feeAmount);
+  const billingNotes = input.billingNotes.trim().slice(0, 500);
+  await getDb()
+    .update(studioMemberships)
+    .set({
+      paymentStatus,
+      serviceEndsOn,
+      lastPaidOn,
+      planName,
+      feeAmount,
+      billingNotes,
+    })
+    .where(eq(studioMemberships.id, member.id));
+  const rows = await listGymClientAccounts();
+  return rows.find(
+    (item) => item.userId === member.userId && item.studioId === studio.id
+  )!;
+}
+
+/** Marca el plan como pagado y corre el vencimiento según mensual/trimestral/anual. */
+export async function markGymClientPaid(input: {
+  studioId: string;
+  clientUserId: string;
+}) {
+  const { studio, member } = await loadOwnedClientMember(
+    input.studioId,
+    input.clientUserId
+  );
+  const plan =
+    parseClientBillingPlan(member.planName) ??
+    ("monthly" as ClientBillingPlan);
+  const renewed = renewBillingPeriod({
+    serviceEndsOn: member.serviceEndsOn ?? "",
+    plan,
+  });
+  const amount = member.feeAmount ?? 0;
+  await getDb()
+    .update(studioMemberships)
+    .set({
+      paymentStatus: renewed.paymentStatus,
+      lastPaidOn: renewed.lastPaidOn,
+      serviceEndsOn: renewed.serviceEndsOn,
+      planName: plan,
+    })
+    .where(eq(studioMemberships.id, member.id));
+  await recordStudioPayment({
+    studioId: studio.id,
+    clientUserId: member.userId,
+    amount,
+    paidOn: renewed.lastPaidOn,
+    planName: plan,
+    note: "Renovación",
+  });
+  const rows = await listGymClientAccounts();
+  return rows.find(
+    (item) => item.userId === member.userId && item.studioId === studio.id
+  )!;
+}
+
+/**
+ * Rellena planes y fechas de ejemplo.
+ * La primera vez (sin notas "Simulado") marca varios vencidos este mes.
+ * Después solo completa alumnos nuevos sin plan.
+ */
+export async function seedGymClientBillingSamples(force = false) {
+  const { branches } = await requireOwnedGym();
+  if (!branches.length) return { updated: 0 };
+  const studioIds = branches.map((item) => item.id);
+  const db = getDb();
+  const members = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        inArray(studioMemberships.studioId, studioIds),
+        eq(studioMemberships.role, "client")
+      )
+    );
+  if (!members.length) return { updated: 0 };
+  const today = todayBillingYmd();
+  const anySimulated = members.some((item) =>
+    (item.billingNotes ?? "").startsWith("Simulado")
+  );
+  const applyAll = force || !anySimulated;
+  const samples: {
+    plan: ClientBillingPlan;
+    fee: number;
+    lastPaidOn: string;
+    serviceEndsOn: string;
+    paymentStatus: ClientPaymentStatus;
+    notes: string;
+  }[] = [
+    {
+      plan: "monthly",
+      fee: 45_000,
+      lastPaidOn: shiftYmd(today, -40),
+      serviceEndsOn: shiftYmd(today, -8),
+      paymentStatus: "overdue",
+      notes: "Simulado: vencido este mes",
+    },
+    {
+      plan: "monthly",
+      fee: 45_000,
+      lastPaidOn: shiftYmd(today, -35),
+      serviceEndsOn: shiftYmd(today, -2),
+      paymentStatus: "overdue",
+      notes: "Simulado: vencido hace pocos días",
+    },
+    {
+      plan: "monthly",
+      fee: 48_000,
+      lastPaidOn: shiftYmd(today, -27),
+      serviceEndsOn: shiftYmd(today, 3),
+      paymentStatus: "current",
+      notes: "Simulado: por vencer",
+    },
+    {
+      plan: "quarterly",
+      fee: 120_000,
+      lastPaidOn: shiftYmd(today, -50),
+      serviceEndsOn: shiftYmd(today, 40),
+      paymentStatus: "current",
+      notes: "Simulado: trimestral al día",
+    },
+    {
+      plan: "annual",
+      fee: 420_000,
+      lastPaidOn: shiftYmd(today, -120),
+      serviceEndsOn: shiftYmd(today, 245),
+      paymentStatus: "current",
+      notes: "Simulado: anual al día",
+    },
+  ];
+
+  let updated = 0;
+  const refreshed = applyAll
+    ? members
+    : await db
+        .select()
+        .from(studioMemberships)
+        .where(
+          and(
+            inArray(studioMemberships.studioId, studioIds),
+            eq(studioMemberships.role, "client")
+          )
+        );
+  for (let i = 0; i < members.length; i += 1) {
+    const member = members[i]!;
+    const hasBilling =
+      Boolean(member.planName?.trim()) || Boolean(member.serviceEndsOn?.trim());
+    if (!applyAll && hasBilling) continue;
+    const sample = samples[i % samples.length]!;
+    await db
+      .update(studioMemberships)
+      .set({
+        planName: sample.plan,
+        feeAmount: sample.fee,
+        lastPaidOn: sample.lastPaidOn,
+        serviceEndsOn: sample.serviceEndsOn,
+        paymentStatus: sample.paymentStatus,
+        billingNotes: sample.notes,
+      })
+      .where(eq(studioMemberships.id, member.id));
+    updated += 1;
+  }
+
+  const [paymentCount] = await db
+    .select({ id: studioPayments.id })
+    .from(studioPayments)
+    .where(inArray(studioPayments.studioId, studioIds))
+    .limit(1);
+  if (!paymentCount || applyAll) {
+    if (applyAll) {
+      // Evita duplicar cobros simulados al forzar de nuevo.
+      const simulated = await db
+        .select({ id: studioPayments.id })
+        .from(studioPayments)
+        .where(
+          and(
+            inArray(studioPayments.studioId, studioIds),
+            eq(studioPayments.note, "Simulado")
+          )
+        );
+      for (const row of simulated) {
+        await db.delete(studioPayments).where(eq(studioPayments.id, row.id));
+      }
+    }
+    const latestMembers =
+      updated > 0
+        ? await db
+            .select()
+            .from(studioMemberships)
+            .where(
+              and(
+                inArray(studioMemberships.studioId, studioIds),
+                eq(studioMemberships.role, "client")
+              )
+            )
+        : refreshed;
+    for (let i = 0; i < latestMembers.length; i += 1) {
+      const member = latestMembers[i]!;
+      if (!member.feeAmount || !member.lastPaidOn) continue;
+      const plan =
+        parseClientBillingPlan(member.planName) ??
+        ("monthly" as ClientBillingPlan);
+      const paymentDates = [member.lastPaidOn];
+      if (plan === "monthly") {
+        paymentDates.push(shiftYmd(member.lastPaidOn, -31));
+        paymentDates.push(shiftYmd(member.lastPaidOn, -62));
+      } else if (plan === "quarterly") {
+        paymentDates.push(shiftYmd(member.lastPaidOn, -90));
+      }
+      for (const paidOn of paymentDates) {
+        await recordStudioPayment({
+          studioId: member.studioId,
+          clientUserId: member.userId,
+          amount: member.feeAmount,
+          paidOn,
+          planName: plan,
+          note: "Simulado",
+        });
+      }
+    }
+  }
+  return { updated };
+}
+
+function monthKeyFromYmd(ymd: string) {
+  return ymd.slice(0, 7);
+}
+
+function monthLabel(key: string) {
+  const [y, m] = key.split("-").map(Number);
+  if (!y || !m) return key;
+  const date = new Date(y, m - 1, 1);
+  return new Intl.DateTimeFormat("es-AR", {
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+/** Claves YYYY-MM de los últimos n meses, el más actual primero. */
+function lastNMonthKeys(n: number) {
+  const keys: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i += 1) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    keys.push(`${y}-${m}`);
+  }
+  return keys;
+}
+
+export type GymRevenueMonth = {
+  key: string;
+  label: string;
+  total: number;
+  payments: number;
+};
+
+export type GymRevenueStats = {
+  studioId: string | null;
+  months: GymRevenueMonth[];
+  total: number;
+  paymentCount: number;
+  branches: { id: string; name: string }[];
+  pendingTotal: number;
+};
+
+/** Ingresos por mes a partir de los cobros registrados, filtrable por sucursal. */
+export async function loadGymRevenueStats(
+  studioId?: string | null
+): Promise<GymRevenueStats> {
+  const { branches } = await requireOwnedGym();
+  const branchList = branches.map((item) => ({
+    id: item.id,
+    name: item.name,
+  }));
+  if (!branchList.length) {
+    return {
+      studioId: null,
+      months: [],
+      total: 0,
+      paymentCount: 0,
+      branches: [],
+      pendingTotal: 0,
+    };
+  }
+  const selected =
+    studioId && branchList.some((item) => item.id === studioId)
+      ? studioId
+      : null;
+  const studioIds = selected
+    ? [selected]
+    : branchList.map((item) => item.id);
+  const db = getDb();
+  const rows = await db
+    .select({
+      amount: studioPayments.amount,
+      paidOn: studioPayments.paidOn,
+    })
+    .from(studioPayments)
+    .where(inArray(studioPayments.studioId, studioIds));
+
+  let paymentRows = rows;
+
+  const members = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        inArray(studioMemberships.studioId, studioIds),
+        eq(studioMemberships.role, "client")
+      )
+    );
+
+  // Si no hay cobros todavía, arma uno por alumno con fee + lastPaidOn.
+  if (!paymentRows.length) {
+    for (const member of members) {
+      if (!member.feeAmount || !member.lastPaidOn) continue;
+      await recordStudioPayment({
+        studioId: member.studioId,
+        clientUserId: member.userId,
+        amount: member.feeAmount,
+        paidOn: member.lastPaidOn,
+        planName: member.planName ?? "",
+        note: "Importado",
+      });
+    }
+    paymentRows = await db
+      .select({
+        amount: studioPayments.amount,
+        paidOn: studioPayments.paidOn,
+      })
+      .from(studioPayments)
+      .where(inArray(studioPayments.studioId, studioIds));
+  }
+
+  const keys = lastNMonthKeys(12);
+  const byMonth = new Map(keys.map((key) => [key, { total: 0, payments: 0 }]));
+  let total = 0;
+  let paymentCount = 0;
+  for (const row of paymentRows) {
+    const key = monthKeyFromYmd(row.paidOn);
+    const bucket = byMonth.get(key);
+    if (!bucket) continue;
+    bucket.total += row.amount;
+    bucket.payments += 1;
+    total += row.amount;
+    paymentCount += 1;
+  }
+
+  const today = todayBillingYmd();
+  const thisMonthKey = today.slice(0, 7);
+  const monthEnd = (() => {
+    const [y, m] = thisMonthKey.split("-").map(Number);
+    const last = new Date(y!, m!, 0);
+    return `${y}-${String(m).padStart(2, "0")}-${String(last.getDate()).padStart(2, "0")}`;
+  })();
+
+  const pendingTotal = members.reduce((sum, member) => {
+    if (member.paymentStatus === "paused" || member.paymentStatus === "comp") {
+      return sum;
+    }
+    const ends = (member.serviceEndsOn ?? "").trim();
+    const pending =
+      member.paymentStatus === "overdue" ||
+      (!ends && member.paymentStatus === "overdue") ||
+      (ends &&
+        (ends < today ||
+          (ends >= `${thisMonthKey}-01` && ends <= monthEnd)));
+    if (!pending) return sum;
+    return sum + (member.feeAmount ?? 0);
+  }, 0);
+
+  return {
+    studioId: selected,
+    months: keys.map((key) => {
+      const bucket = byMonth.get(key)!;
+      return {
+        key,
+        label: monthLabel(key),
+        total: bucket.total,
+        payments: bucket.payments,
+      };
+    }),
+    total,
+    paymentCount,
+    branches: branchList,
+    pendingTotal,
+  };
+}
+
 export async function createStudioTeacher(input: {
   studioId: string;
   displayName: string;
   phone: string;
   username: string;
   password: string;
+  sex: Sex;
 }) {
   const { studio } = await requireStudioOwner(input.studioId);
   const displayName = input.displayName.trim();
   if (displayName.length < 2) throw new Error("Pon el nombre del profesor.");
   const phone = parsePhone(input.phone);
+  const sex = parseTeacherSex(input.sex);
   const { userId } = await createTeacherAccount({
     displayName,
     username: input.username,
@@ -1508,6 +2127,7 @@ export async function createStudioTeacher(input: {
     userId,
     displayName,
     phone,
+    sex,
   });
   return loadStudioDashboard(studio.id);
 }
@@ -1517,6 +2137,7 @@ export type GymTeacherSummary = {
   displayName: string;
   phone: string;
   username: string;
+  sex: Sex;
   branches: { studioId: string; name: string }[];
 };
 
@@ -1542,6 +2163,7 @@ export type GymTeacherDetail = {
   displayName: string;
   phone: string;
   username: string;
+  sex: Sex;
   assigned: GymTeacherBranch[];
   available: { studioId: string; name: string; dayHours: StudioDayHours[] }[];
   clients: GymTeacherClient[];
@@ -1669,6 +2291,7 @@ async function loadGymTeacherDetail(
     displayName,
     phone,
     username: account?.username ?? "",
+    sex: roster?.sex ?? "other",
     assigned,
     available,
     clients,
@@ -1728,6 +2351,7 @@ export async function listGymTeachers(): Promise<GymTeacherSummary[]> {
       displayName: item.displayName,
       phone: item.phone ?? "",
       username: usernameById.get(item.userId) ?? "",
+      sex: item.sex ?? "other",
       branches: branchesByTeacher.get(item.userId) ?? [],
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "es"));
@@ -1738,16 +2362,23 @@ export async function loadGymTeacher(teacherUserId: string) {
   return loadGymTeacherDetail(userId, branches, teacherUserId.trim());
 }
 
+function parseTeacherSex(raw: string | undefined): Sex {
+  if (raw === "female" || raw === "male" || raw === "other") return raw;
+  throw new Error("Elegí el género del profesor.");
+}
+
 export async function createGymTeacher(input: {
   displayName: string;
   phone: string;
   username: string;
   password: string;
+  sex: Sex;
 }) {
   const { userId: ownerUserId, branches } = await requireOwnedGym();
   const displayName = input.displayName.trim();
   if (displayName.length < 2) throw new Error("Pon el nombre del profesor.");
   const phone = parsePhone(input.phone);
+  const sex = parseTeacherSex(input.sex);
   const { userId: teacherUserId } = await createTeacherAccount({
     displayName,
     username: input.username,
@@ -1758,8 +2389,40 @@ export async function createGymTeacher(input: {
     userId: teacherUserId,
     displayName,
     phone,
+    sex,
   });
   return loadGymTeacherDetail(ownerUserId, branches, teacherUserId);
+}
+
+export async function updateGymTeacher(input: {
+  teacherUserId: string;
+  displayName?: string;
+  phone?: string;
+  sex?: Sex;
+}) {
+  const { userId: ownerUserId, branches } = await requireOwnedGym();
+  const detail = await loadGymTeacherDetail(
+    ownerUserId,
+    branches,
+    input.teacherUserId.trim()
+  );
+  const displayName =
+    input.displayName !== undefined
+      ? input.displayName.trim()
+      : detail.displayName;
+  if (displayName.length < 2) throw new Error("Pon el nombre del profesor.");
+  const phone =
+    input.phone !== undefined ? parsePhone(input.phone) : detail.phone;
+  const sex =
+    input.sex !== undefined ? parseTeacherSex(input.sex) : detail.sex;
+  await upsertGymTeacher({
+    ownerUserId,
+    userId: detail.userId,
+    displayName,
+    phone,
+    sex,
+  });
+  return loadGymTeacherDetail(ownerUserId, branches, detail.userId);
 }
 
 export async function assignGymTeacher(input: {
@@ -2361,7 +3024,12 @@ export type ClientProfile = {
   studioName: string;
 };
 
-export async function loadAssignedTeacherName(): Promise<string | null> {
+export type AssignedTeacher = {
+  name: string;
+  sex: Sex;
+};
+
+export async function loadAssignedTeacher(): Promise<AssignedTeacher | null> {
   const userId = await requireUserId();
   const member = await membershipFor(userId, "client");
   if (!member || member.role !== "client" || !member.assignedTeacherUserId) {
@@ -2379,7 +3047,35 @@ export async function loadAssignedTeacherName(): Promise<string | null> {
     )
     .limit(1);
   const name = teacher?.displayName.trim();
-  return name || null;
+  if (!name) return null;
+  const [studio] = await getDb()
+    .select({ ownerUserId: studios.ownerUserId })
+    .from(studios)
+    .where(eq(studios.id, member.studioId))
+    .limit(1);
+  let sex: Sex = "other";
+  if (studio?.ownerUserId) {
+    const [roster] = await getDb()
+      .select({ sex: gymTeachers.sex })
+      .from(gymTeachers)
+      .where(
+        and(
+          eq(gymTeachers.ownerUserId, studio.ownerUserId),
+          eq(gymTeachers.userId, member.assignedTeacherUserId)
+        )
+      )
+      .limit(1);
+    if (roster?.sex === "female" || roster?.sex === "male" || roster?.sex === "other") {
+      sex = roster.sex;
+    }
+  }
+  return { name, sex };
+}
+
+/** @deprecated Use loadAssignedTeacher */
+export async function loadAssignedTeacherName(): Promise<string | null> {
+  const teacher = await loadAssignedTeacher();
+  return teacher?.name ?? null;
 }
 
 export async function loadClientProfile(): Promise<ClientProfile | null> {

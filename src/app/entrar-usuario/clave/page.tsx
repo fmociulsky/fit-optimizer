@@ -8,7 +8,7 @@ export default function StudentPasswordPage() {
       fallback={
         <AuthShell
           title="Elegí tu contraseña."
-          hint="Abriendo el enlace del email."
+          hint="Abriendo el enlace para restablecer tu contraseña."
         />
       }
     >

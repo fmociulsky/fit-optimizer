@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { studioKindsLabel, WEEKDAYS } from "@/lib/labels";
+import { SEX_LABEL, studioKindsLabel, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
 import {
   assignTeacherToBranch,
@@ -34,6 +34,7 @@ import {
   type StudioDashboard,
   type StudioPerson,
 } from "@/lib/studio";
+import type { Sex } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function weekdayLabel(id: number) {
@@ -132,6 +133,7 @@ function StudioTeachersCard({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [username, setUsername] = useState("");
+  const [sex, setSex] = useState<Sex | null>(null);
   const [busy, setBusy] = useState(false);
   const [assignable, setAssignable] = useState<AssignableTeacher[]>([]);
   const [pick, setPick] = useState("");
@@ -185,6 +187,10 @@ function StudioTeachersCard({
   }, [dash.studio.id, assigned.length]);
 
   async function createTeacher() {
+    if (!sex) {
+      toast.error("Elegí el género del profesor.");
+      return;
+    }
     setBusy(true);
     try {
       onChange(
@@ -194,11 +200,13 @@ function StudioTeachersCard({
           phone,
           username,
           password: "1234",
+          sex,
         })
       );
       setName("");
       setPhone("");
       setUsername("");
+      setSex(null);
       setCreating(false);
       toast.success("Profesor creado y asignado a esta sucursal.");
     } catch (error) {
@@ -307,6 +315,26 @@ function StudioTeachersCard({
                 value={username}
                 onChange={(event) => setUsername(event.target.value)}
               />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Género</Label>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {(Object.keys(SEX_LABEL) as Sex[]).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setSex(option)}
+                    className={cn(
+                      "rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors",
+                      sex === option
+                        ? "border-primary bg-primary/8 ring-1 ring-primary"
+                        : "border-border bg-background hover:border-primary/40"
+                    )}
+                  >
+                    {SEX_LABEL[option]}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <Button

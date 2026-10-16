@@ -1,4 +1,5 @@
 import type {
+  ClientPaymentStatus,
   Equipment,
   Experience,
   FocusArea,
@@ -56,6 +57,19 @@ export const SEX_LABEL: Record<Sex, string> = {
   male: "Hombre",
   other: "Otro / prefiero no decir",
 };
+
+export const CLIENT_PAYMENT_STATUS_LABEL: Record<ClientPaymentStatus, string> = {
+  current: "Al día",
+  overdue: "Deuda",
+  paused: "Pausado",
+  trial: "Prueba",
+  comp: "Cortesía",
+};
+
+/** Rol gramatical según el sexo del profesor. */
+export function teacherRoleWord(sex?: Sex | null) {
+  return sex === "female" ? "profesora" : "profesor";
+}
 
 export const EXPERIENCE_LABEL: Record<Experience, string> = {
   beginner: "Principiante",

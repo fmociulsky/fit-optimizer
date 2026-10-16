@@ -4,11 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSignIn, useSignUp } from "@clerk/nextjs";
+import { toast } from "sonner";
 import { AuthShell } from "@/components/auth-shell";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { claimStudentFromClerk } from "@/lib/student-auth";
+import { loginDemoClient } from "@/lib/session";
+import { PASSWORD_HINT, passwordClientError } from "@/lib/password-rules";
+import {
+  claimStudentFromClerk,
+  loadPasswordResetTarget,
+  resetStudentPasswordWithToken,
+  syncStudentPasswordFromClerk,
+} from "@/lib/student-auth";
 import { cn } from "@/lib/utils";
 
 function clerkMessage(error: { message?: string; longMessage?: string } | null) {
@@ -26,6 +34,7 @@ function ticketFromParams(params: URLSearchParams) {
 
 export function StudentPasswordForm() {
   const searchParams = useSearchParams();
+  const resetToken = searchParams.get("token")?.trim() || "";
   const { signUp, fetchStatus: signUpStatus } = useSignUp();
   const { signIn, fetchStatus: signInStatus } = useSignIn();
   const [password, setPassword] = useState("");
@@ -33,15 +42,40 @@ export function StudentPasswordForm() {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetEmail, setResetEmail] = useState("");
   const started = useRef(false);
 
-  const waiting = busy || signUpStatus === "fetching" || signInStatus === "fetching";
+  const waiting =
+    busy || signUpStatus === "fetching" || signInStatus === "fetching";
 
   useEffect(() => {
+    if (resetToken) {
+      let cancelled = false;
+      void loadPasswordResetTarget(resetToken)
+        .then((target) => {
+          if (cancelled) return;
+          setResetEmail(target.email);
+          setReady(true);
+        })
+        .catch((caught: unknown) => {
+          if (cancelled) return;
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Ese enlace no es válido. Pedí recuperar contraseña de nuevo."
+          );
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     if (!signUp || started.current) return;
     const ticket = ticketFromParams(searchParams);
     if (!ticket) {
-      setError("Ese enlace no es válido. Pedí de nuevo el primer ingreso.");
+      setError(
+        "Ese enlace no es válido. Pedí recuperar contraseña de nuevo."
+      );
       return;
     }
     started.current = true;
@@ -65,7 +99,11 @@ export function StudentPasswordForm() {
           return;
         }
       }
-      if (ticketError && signUp.status !== "complete" && signUp.missingFields.length === 0) {
+      if (
+        ticketError &&
+        signUp.status !== "complete" &&
+        signUp.missingFields.length === 0
+      ) {
         setError(clerkMessage(ticketError));
         return;
       }
@@ -82,12 +120,45 @@ export function StudentPasswordForm() {
       }
       setReady(true);
     })();
-  }, [searchParams, signIn, signUp]);
+  }, [resetToken, searchParams, signIn, signUp]);
 
-  async function submit() {
+  async function submitResetToken() {
+    if (waiting) return;
+    const passwordError = passwordClientError(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+    if (password !== confirm) {
+      setError("Las contraseñas no coinciden.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await resetStudentPasswordWithToken(resetToken, password);
+      const account = await loginDemoClient(
+        result.email || resetEmail,
+        password
+      );
+      if (!account) {
+        throw new Error("La contraseña se guardó. Entrá con tu email.");
+      }
+      toast.success("Contraseña actualizada.");
+      window.location.assign("/panel");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "No se pudo guardar."
+      );
+      setBusy(false);
+    }
+  }
+
+  async function submitClerkInvite() {
     if (waiting || !signUp) return;
-    if (password.length < 4) {
-      setError("La contraseña tiene que tener al menos 4 caracteres.");
+    const passwordError = passwordClientError(password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
     if (password !== confirm) {
@@ -105,7 +176,9 @@ export function StudentPasswordForm() {
       });
       if (passwordError) throw new Error(clerkMessage(passwordError));
       if (signUp.status !== "complete") {
-        throw new Error("Falta completar el alta. Revisá el email e intentá de nuevo.");
+        throw new Error(
+          "Falta completar el alta. Revisá el email e intentá de nuevo."
+        );
       }
       await signUp.finalize({
         navigate: async ({ decorateUrl }) => {
@@ -119,11 +192,18 @@ export function StudentPasswordForm() {
             window.location.replace("/entrar-usuario?error=no-alumno");
             return;
           }
+          try {
+            await syncStudentPasswordFromClerk(password);
+          } catch {
+            // Entró igual; la contraseña de Clerk ya quedó.
+          }
           window.location.assign("/panel");
         },
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No se pudo guardar.");
+      setError(
+        caught instanceof Error ? caught.message : "No se pudo guardar."
+      );
       setBusy(false);
     }
   }
@@ -131,19 +211,24 @@ export function StudentPasswordForm() {
   return (
     <AuthShell
       title="Elegí tu contraseña."
-      hint="Con ese email y esta contraseña vas a entrar la próxima vez."
+      hint={`Con ese email y esta contraseña vas a entrar la próxima vez. ${PASSWORD_HINT}`}
     >
       {!ready && !error ? (
-        <p className="text-center text-sm text-muted-foreground">Abriendo el enlace…</p>
+        <p className="text-center text-sm text-muted-foreground">
+          Abriendo el enlace…
+        </p>
       ) : null}
       {ready ? (
         <form
           className="mx-auto w-full max-w-sm space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
-            void submit();
+            void (resetToken ? submitResetToken() : submitClerkInvite());
           }}
         >
+          {resetEmail ? (
+            <p className="text-sm text-muted-foreground">{resetEmail}</p>
+          ) : null}
           <div className="space-y-2">
             <Label htmlFor="new-pass">Contraseña</Label>
             <Input
@@ -182,7 +267,10 @@ export function StudentPasswordForm() {
           </p>
           <Link
             href="/entrar-usuario"
-            className={cn(buttonVariants(), "flex h-11 w-full items-center justify-center")}
+            className={cn(
+              buttonVariants(),
+              "flex h-11 w-full items-center justify-center"
+            )}
           >
             Volver
           </Link>

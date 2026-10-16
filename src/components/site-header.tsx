@@ -10,6 +10,7 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
+  ChartColumn,
   Dumbbell,
   GraduationCap,
   MapPin,
@@ -20,6 +21,7 @@ import {
   UserPlus,
   Users,
   UtensilsCrossed,
+  Wallet,
   X,
 } from "lucide-react";
 import {
@@ -185,12 +187,14 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                       pathname === "/estudio" ||
                       (pathname.startsWith("/estudio/") &&
                         !pathname.startsWith("/estudio/profesores") &&
-                        !pathname.startsWith("/estudio/alumnos"))
+                        !pathname.startsWith("/estudio/alumnos") &&
+                        !pathname.startsWith("/estudio/cuentas") &&
+                        !pathname.startsWith("/estudio/estadisticas"))
                     }
                     icon={Building2}
                     onNavigate={() => setOpen(false)}
                   >
-                    Gimnasio
+                    Estudio
                   </MenuLink>
                   <MenuLink
                     href="/estudio/profesores"
@@ -213,6 +217,28 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     onNavigate={() => setOpen(false)}
                   >
                     Alumnos
+                  </MenuLink>
+                  <MenuLink
+                    href="/estudio/cuentas"
+                    active={
+                      pathname === "/estudio/cuentas" ||
+                      pathname.startsWith("/estudio/cuentas/")
+                    }
+                    icon={Wallet}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Cuentas
+                  </MenuLink>
+                  <MenuLink
+                    href="/estudio/estadisticas"
+                    active={
+                      pathname === "/estudio/estadisticas" ||
+                      pathname.startsWith("/estudio/estadisticas/")
+                    }
+                    icon={ChartColumn}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Estadísticas
                   </MenuLink>
                 </>
               ) : isPro ? (

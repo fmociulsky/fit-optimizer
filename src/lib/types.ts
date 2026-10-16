@@ -243,6 +243,17 @@ export interface PersistedUser {
 export type AccountRole = "client" | "professional" | "studio";
 export type StudioMemberRole = "owner" | "teacher" | "client";
 
+/** Estado de cuenta / pago del alumno en el estudio. */
+export type ClientPaymentStatus =
+  | "current"
+  | "overdue"
+  | "paused"
+  | "trial"
+  | "comp";
+
+/** Plan de facturación del alumno. */
+export type ClientBillingPlan = "monthly" | "quarterly" | "annual";
+
 export type CoachRequestStatus = "pending" | "loaded";
 
 export interface Account {

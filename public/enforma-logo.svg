@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Enforma">
+  <circle cx="64" cy="64" r="64" fill="#A35A2E"/>
+  <g fill="none" stroke="#FFF8F0" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 52v24M88 52v24"/>
+    <path d="M40 64h48"/>
+    <path d="M34 48v32M46 48v32M82 48v32M94 48v32"/>
+  </g>
+</svg>

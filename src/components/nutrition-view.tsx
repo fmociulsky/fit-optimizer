@@ -18,6 +18,9 @@ import {
   NUTRITION_ACCEPTANCE_TEXT,
   NUTRITION_PROFESSIONAL_WARNING,
 } from "@/lib/nutrition";
+import { teacherRoleWord } from "@/lib/labels";
+import { loadAssignedTeacher } from "@/lib/studio";
+import type { Sex } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function Macro({
@@ -68,10 +71,33 @@ export function NutritionView() {
   const { ready, state, account, acceptNutritionGuide, saveNutritionMenu } =
     useAppStore();
   const [acceptedNotice, setAcceptedNotice] = useState(false);
+  const [assignedTeacher, setAssignedTeacher] = useState<string | null>(null);
+  const [assignedTeacherSex, setAssignedTeacherSex] = useState<Sex | null>(null);
+  const studioStudent =
+    account?.role === "client" && account.studioRole === "client";
 
   useEffect(() => {
     if (ready && !state) router.replace("/comenzar");
   }, [ready, state, router]);
+
+  useEffect(() => {
+    if (!ready || !studioStudent) return;
+    let cancelled = false;
+    void loadAssignedTeacher()
+      .then((teacher) => {
+        if (cancelled) return;
+        setAssignedTeacher(teacher?.name ?? null);
+        setAssignedTeacherSex(teacher?.sex ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAssignedTeacher(null);
+        setAssignedTeacherSex(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, studioStudent]);
 
   if (!ready || !state) {
     return (
@@ -82,9 +108,13 @@ export function NutritionView() {
   }
 
   const firstName = state.profile.name.split(" ")[0];
-  const studioStudent =
-    account?.role === "client" && account.studioRole === "client";
   const teacherFood = state.plan.coachNutrition ?? [];
+  const teacherName =
+    state.plan.loadedBy?.name.trim() || assignedTeacher || null;
+  const role = teacherRoleWord(assignedTeacherSex);
+  const teacherLabel = teacherName
+    ? `Tu ${role} ${teacherName}`
+    : `Tu ${role}`;
 
   if (studioStudent && teacherFood.length === 0) {
     return (
@@ -98,8 +128,8 @@ export function NutritionView() {
             Tu comida.
           </h1>
           <p className="mt-3 text-muted-foreground">
-            Tu profesor todavía no cargó un plan nutricional. Cuando lo haga,
-            aparece acá.
+            {teacherLabel} todavía no cargó un plan nutricional. Cuando lo
+            haga, aparece acá.
           </p>
           <Link
             href="/panel"

@@ -2,17 +2,17 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useSignIn } from "@clerk/nextjs";
 import { toast } from "sonner";
 import { AuthShell } from "@/components/auth-shell";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { loginDemoClient } from "@/lib/session";
 import {
   claimStudentFromClerk,
-  requestStudentFirstAccess,
+  requestStudentPasswordReset,
 } from "@/lib/student-auth";
 import { cn } from "@/lib/utils";
 
@@ -21,10 +21,10 @@ function clerkMessage(error: { message?: string; longMessage?: string } | null) 
 }
 
 export function ClientLoginForm({ denied = false }: { denied?: boolean }) {
-  const { signIn, errors, fetchStatus } = useSignIn();
+  const router = useRouter();
+  const { signIn, fetchStatus } = useSignIn();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [firstAccess, setFirstAccess] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(
     denied
@@ -61,17 +61,38 @@ export function ClientLoginForm({ denied = false }: { denied?: boolean }) {
     window.location.assign("/panel");
   }
 
+  async function recoverPassword() {
+    if (waiting) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await requestStudentPasswordReset(email);
+      if (result.mode === "clerk") {
+        toast.message("Te pedimos un código por email.");
+        router.push(
+          `/entrar-usuario/recuperar?email=${encodeURIComponent(result.email)}`
+        );
+        return;
+      }
+      toast.success(
+        "Te enviamos un email con un enlace para restablecer tu contraseña."
+      );
+      setBusy(false);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo enviar el email."
+      );
+      setBusy(false);
+    }
+  }
+
   async function submit() {
     if (waiting) return;
     setBusy(true);
     setError(null);
     try {
-      if (firstAccess) {
-        await requestStudentFirstAccess(email);
-        toast.success("Te enviamos un email para setear tu contraseña.");
-        setBusy(false);
-        return;
-      }
       const account = await loginDemoClient(email, password);
       if (account) {
         toast.success(
@@ -103,7 +124,9 @@ export function ClientLoginForm({ denied = false }: { denied?: boolean }) {
         });
         return;
       }
-      throw new Error("No se pudo entrar. Si es tu primer ingreso, tildá esa opción.");
+      throw new Error(
+        "No se pudo entrar. Si olvidaste la contraseña, tocá recuperar contraseña."
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo entrar.");
       setBusy(false);
@@ -147,37 +170,34 @@ export function ClientLoginForm({ denied = false }: { denied?: boolean }) {
             placeholder="tu@email.com"
           />
         </div>
-        {!firstAccess && (
-          <div className="space-y-2">
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
             <Label htmlFor="user-pass">Contraseña</Label>
-            <Input
-              id="user-pass"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="h-11 text-base"
-              autoComplete="current-password"
-            />
+            <button
+              type="button"
+              className="text-xs font-medium text-primary"
+              disabled={waiting}
+              onClick={() => void recoverPassword()}
+            >
+              Recuperar contraseña
+            </button>
           </div>
-        )}
-        <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-foreground/8 bg-card px-4 py-3">
-          <Checkbox
-            checked={firstAccess}
-            onCheckedChange={(value) => setFirstAccess(Boolean(value))}
+          <Input
+            id="user-pass"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            className="h-11 text-base"
+            autoComplete="current-password"
           />
-          <span className="text-sm">Primer ingreso</span>
-        </label>
+        </div>
         {error && (
           <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
           </p>
         )}
         <Button className="h-11 w-full" disabled={waiting} type="submit">
-          {waiting
-            ? "Esperá…"
-            : firstAccess
-              ? "Enviar email"
-              : "Entrar"}
+          {waiting ? "Esperá…" : "Entrar"}
         </Button>
         <p className="text-center text-xs text-muted-foreground">
           Los alumnos del gimnasio entran con su email y contraseña 1234.

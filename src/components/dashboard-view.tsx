@@ -33,6 +33,7 @@ import {
   FOCUS_AREA_LABEL,
   GOAL_LABEL,
   HORIZON_LABEL,
+  teacherRoleWord,
   weekdayName,
   weekdayShort,
 } from "@/lib/labels";
@@ -56,7 +57,8 @@ import {
   weekGrid,
 } from "@/lib/schedule";
 import { clientHomeHref } from "@/lib/roles";
-import { loadAssignedTeacherName } from "@/lib/studio";
+import { loadAssignedTeacher } from "@/lib/studio";
+import type { Sex } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function Score({ value }: { value: number }) {
@@ -82,6 +84,19 @@ function zonesLabel(areas?: (keyof typeof FOCUS_AREA_LABEL)[] | null) {
     .join(", ");
 }
 
+function teacherPendingPlanCopy(
+  teacherName: string | null,
+  teacherSex: Sex | null,
+  kind: "plan" | "ejercicios"
+) {
+  const role = teacherRoleWord(teacherSex);
+  const name = teacherName?.trim();
+  const who = name ? `Tu ${role} ${name}` : `Tu ${role}`;
+  const what =
+    kind === "ejercicios" ? "el plan de ejercicios" : "el plan";
+  return `${who} todavía no cargó ${what}. Cuando lo haga, las sesiones aparecen acá.`;
+}
+
 export function DashboardView() {
   const router = useRouter();
   const { ready, state, logSession, reset, acceptPlanGuide, account } =
@@ -89,25 +104,30 @@ export function DashboardView() {
   const [rpe, setRpe] = useState(7);
   const [acceptedNotice, setAcceptedNotice] = useState(false);
   const [assignedTeacher, setAssignedTeacher] = useState<string | null>(null);
+  const [assignedTeacherSex, setAssignedTeacherSex] = useState<Sex | null>(null);
 
   const studioStudent =
     account?.role === "client" && account.studioRole === "client";
   const savedTeacher = state?.plan.loadedBy?.name.trim() || null;
 
   useEffect(() => {
-    if (!ready || !studioStudent || savedTeacher) return;
+    if (!ready || !studioStudent) return;
     let cancelled = false;
-    void loadAssignedTeacherName()
-      .then((name) => {
-        if (!cancelled) setAssignedTeacher(name);
+    void loadAssignedTeacher()
+      .then((teacher) => {
+        if (cancelled) return;
+        setAssignedTeacher(teacher?.name ?? null);
+        setAssignedTeacherSex(teacher?.sex ?? null);
       })
       .catch(() => {
-        if (!cancelled) setAssignedTeacher(null);
+        if (cancelled) return;
+        setAssignedTeacher(null);
+        setAssignedTeacherSex(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [ready, savedTeacher, studioStudent]);
+  }, [ready, studioStudent]);
 
   useEffect(() => {
     if (!ready) return;
@@ -129,8 +149,11 @@ export function DashboardView() {
               Tu plan.
             </h1>
             <p className="mt-3 max-w-xl text-muted-foreground">
-              Tu profesor todavía no cargó el plan. Cuando lo haga, las
-              sesiones aparecen acá.
+              {teacherPendingPlanCopy(
+                assignedTeacher,
+                assignedTeacherSex,
+                "plan"
+              )}
             </p>
             <Link
               href="/turnos"
@@ -291,8 +314,11 @@ export function DashboardView() {
 
         {coachPending && (
           <div className="mt-6 rounded-2xl border border-foreground/8 bg-card p-4 text-sm leading-relaxed text-muted-foreground">
-            Tu profesor todavía no cargó el plan de ejercicios. Cuando lo haga,
-            las sesiones aparecen acá.
+            {teacherPendingPlanCopy(
+              savedTeacher || assignedTeacher,
+              assignedTeacherSex,
+              "ejercicios"
+            )}
           </div>
         )}
 

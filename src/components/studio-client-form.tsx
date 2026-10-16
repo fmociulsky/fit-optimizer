@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DefaultAttendancePicker } from "@/components/default-attendance-picker";
 import { Button } from "@/components/ui/button";
@@ -13,13 +13,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  CLIENT_BILLING_PLAN_LABEL,
+  CLIENT_BILLING_PLANS,
+  serviceEndsFromStart,
+  todayBillingYmd,
+} from "@/lib/client-account";
 import { studioKindsLabel } from "@/lib/labels";
 import {
   createStudioClient,
   updateStudioClient,
   type StudioDashboard,
 } from "@/lib/studio";
-import type { StudioKind } from "@/lib/types";
+import type { ClientBillingPlan, StudioKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const fieldClass =
@@ -119,12 +125,24 @@ export function StudioClientForm({
   const [picks, setPicks] = useState<{ weekday: number; slotStart: string }[]>(
     initial?.picks ?? []
   );
+  const [billingPlan, setBillingPlan] = useState<ClientBillingPlan | null>(
+    null
+  );
+  const [serviceStartsOn, setServiceStartsOn] = useState(todayBillingYmd());
   const [busy, setBusy] = useState(false);
   const teachers =
     dash?.people.filter((item) => item.role === "teacher" && item.userId) ?? [];
   const studioKinds = dash?.studio.kinds ?? [];
   const chosenTeacher = teacherId || teachers[0]?.userId || "";
   const allowed = Number(sessions);
+  const serviceEndsOn = useMemo(() => {
+    if (editing || !billingPlan || !serviceStartsOn) return "";
+    try {
+      return serviceEndsFromStart(serviceStartsOn, billingPlan);
+    } catch {
+      return "";
+    }
+  }, [editing, billingPlan, serviceStartsOn]);
 
   useEffect(() => {
     if (initial) return;
@@ -147,6 +165,16 @@ export function StudioClientForm({
       toast.error("Elegí una sucursal.");
       return;
     }
+    if (!initial) {
+      if (!billingPlan) {
+        toast.error("Elegí el plan: mensual, trimestral o anual.");
+        return;
+      }
+      if (!serviceStartsOn) {
+        toast.error("Pon el día de inicio del plan.");
+        return;
+      }
+    }
     setBusy(true);
     try {
       const payload = {
@@ -165,7 +193,11 @@ export function StudioClientForm({
             ...payload,
             clientUserId: initial.userId,
           })
-        : await createStudioClient(payload);
+        : await createStudioClient({
+            ...payload,
+            billingPlan: billingPlan!,
+            serviceStartsOn,
+          });
       onSaved(next);
       if (!initial) {
         setName("");
@@ -174,6 +206,8 @@ export function StudioClientForm({
         setBirthDate("");
         setActivities(studioKinds.length === 1 ? studioKinds : []);
         setPicks([]);
+        setBillingPlan(null);
+        setServiceStartsOn(todayBillingYmd());
       }
       toast.success(initial ? "Alumno actualizado." : "Alumno creado.");
     } catch (error) {
@@ -189,8 +223,8 @@ export function StudioClientForm({
         <>
           <p className="font-medium">{editing ? "Editar alumno" : "Nuevo alumno"}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Datos personales, actividad, email, cuántos días va y los horarios por
-            defecto dentro de la apertura de la sucursal.
+            Datos personales, plan de pago, actividad, cuántos días va y los
+            horarios por defecto dentro de la apertura de la sucursal.
           </p>
         </>
       ) : null}
@@ -306,6 +340,52 @@ export function StudioClientForm({
             ))}
           </select>
         </div>
+        {!editing ? (
+          <>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label>Plan</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {CLIENT_BILLING_PLANS.map((plan) => (
+                  <button
+                    key={plan}
+                    type="button"
+                    onClick={() => setBillingPlan(plan)}
+                    className={cn(
+                      "h-11 rounded-xl border text-sm font-medium",
+                      billingPlan === plan
+                        ? "border-primary bg-primary/8 ring-1 ring-primary"
+                        : "border-border hover:border-primary/40"
+                    )}
+                  >
+                    {CLIENT_BILLING_PLAN_LABEL[plan]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="client-start">Día de inicio</Label>
+              <Input
+                id="client-start"
+                type="date"
+                className="h-11 text-base"
+                value={serviceStartsOn}
+                onChange={(event) => setServiceStartsOn(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Próximo vencimiento</Label>
+              <p className="flex h-11 items-center rounded-lg border border-dashed border-border px-2.5 text-sm text-muted-foreground">
+                {serviceEndsOn
+                  ? new Intl.DateTimeFormat("es-AR", {
+                      day: "numeric",
+                      month: "long",
+                      year: "numeric",
+                    }).format(new Date(`${serviceEndsOn}T12:00:00`))
+                  : "Elegí plan e inicio"}
+              </p>
+            </div>
+          </>
+        ) : null}
       </div>
       {teachers.length === 0 ? (
         <p className="mt-4 text-sm text-muted-foreground">
