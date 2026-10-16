@@ -1132,6 +1132,11 @@ function reservationRowsForPicks(input: {
     const cell = input.occupancy.find(
       (item) => item.weekday === pick.weekday && item.slotStart === pick.slotStart
     );
+    if (!cell?.teachers.length) {
+      throw new Error(
+        `No hay profesor en ese horario (${pick.slotStart}).`
+      );
+    }
     const mineHere = input.existing.some(
       (item) =>
         item.clientUserId === input.clientUserId &&

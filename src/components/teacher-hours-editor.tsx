@@ -142,13 +142,19 @@ export function TeacherHoursEditor({
                 <select
                   className={fieldClass}
                   value={shift.startHour}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "") {
+                      toggle(day.id);
+                      return;
+                    }
                     setDraft((current) => ({
                       ...current,
-                      [day.id]: { ...shift, startHour: event.target.value },
-                    }))
-                  }
+                      [day.id]: { ...shift, startHour: value },
+                    }));
+                  }}
                 >
+                  <option value="">No trabaja</option>
                   {HOURS.map((hour) => (
                     <option key={hour} value={hour}>
                       Desde {hour}
@@ -158,13 +164,19 @@ export function TeacherHoursEditor({
                 <select
                   className={fieldClass}
                   value={shift.endHour}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "") {
+                      toggle(day.id);
+                      return;
+                    }
                     setDraft((current) => ({
                       ...current,
-                      [day.id]: { ...shift, endHour: event.target.value },
-                    }))
-                  }
+                      [day.id]: { ...shift, endHour: value },
+                    }));
+                  }}
                 >
+                  <option value="">No trabaja</option>
                   {HOURS.map((hour) => (
                     <option key={hour} value={hour}>
                       Hasta {hour}
@@ -173,9 +185,13 @@ export function TeacherHoursEditor({
                 </select>
               </>
             ) : (
-              <p className="text-sm text-muted-foreground sm:col-span-2">
-                No trabaja
-              </p>
+              <button
+                type="button"
+                onClick={() => toggle(day.id)}
+                className="h-11 rounded-lg border border-dashed border-foreground/15 px-3 text-left text-sm text-muted-foreground sm:col-span-2"
+              >
+                No trabaja · tocar para asignar horario
+              </button>
             )}
           </div>
         );

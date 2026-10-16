@@ -284,13 +284,19 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
     .where(eq(accounts.userId, DEMO_PROFESSIONAL_ID))
     .limit(1);
   if (existing?.role === "professional" && existing.code) {
+    if (existing.username !== "hema") {
+      await db
+        .update(accounts)
+        .set({ username: "hema", updatedAt: new Date() })
+        .where(eq(accounts.userId, DEMO_PROFESSIONAL_ID));
+    }
     await ensureDemoClient(existing.userId);
     await ensureDemoTeacherAssignment();
     return {
       userId: existing.userId,
       role: "professional",
       name: existing.name || "Profesor de prueba",
-      username: existing.username || "1234",
+      username: "hema",
       code: existing.code,
       linkedProfessionalId: null,
       linkedProfessionalCode: null,
@@ -315,6 +321,7 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
       userId: DEMO_PROFESSIONAL_ID,
       role: "professional",
       name: "Profesor de prueba",
+      username: "hema",
       code,
       linkedProfessionalId: null,
       createdAt: now,
@@ -325,6 +332,7 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
       set: {
         role: "professional",
         name: "Profesor de prueba",
+        username: "hema",
         code,
         linkedProfessionalId: null,
         updatedAt: now,
@@ -337,7 +345,7 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
     userId: DEMO_PROFESSIONAL_ID,
     role: "professional",
     name: "Profesor de prueba",
-    username: "1234",
+    username: "hema",
     code,
     linkedProfessionalId: null,
     linkedProfessionalCode: null,
@@ -397,7 +405,7 @@ async function ensureDemoStudioAccount(): Promise<Account> {
       userId: DEMO_STUDIO_ID,
       role: "studio",
       name: gymName,
-      username: "2222",
+      username: "hema",
       code: owned.code || DEMO_STUDIO_CODE,
       linkedProfessionalId: null,
       linkedProfessionalCode: null,
@@ -525,7 +533,7 @@ async function ensureDemoStudioAccount(): Promise<Account> {
     userId: DEMO_STUDIO_ID,
     role: "studio",
     name: "Casa Norte",
-    username: "2222",
+    username: "hema",
     code: studio.code || DEMO_STUDIO_CODE,
     linkedProfessionalId: null,
     linkedProfessionalCode: null,
@@ -610,7 +618,7 @@ const DEMO_COOKIE = {
 
 export async function loginDemoProfessional(username: string, password: string) {
   let account: Account;
-  if (username.trim() === "1234" && password === "1234") {
+  if (username.trim().toLowerCase() === "hema" && password === "1234") {
     account = await ensureDemoProfessionalAccount();
   } else {
     const normalized = username.trim().toLowerCase();
@@ -692,7 +700,7 @@ export async function loginDemoClient(username: string, password: string) {
 }
 
 export async function loginDemoStudio(username: string, password: string) {
-  if (username.trim() !== "2222" || password !== "2222") {
+  if (username.trim().toLowerCase() !== "hema" || password !== "1234") {
     throw new Error("Usuario o contraseña incorrectos.");
   }
   const jar = await cookies();

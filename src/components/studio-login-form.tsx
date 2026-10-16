@@ -35,7 +35,7 @@ export function StudioLoginForm() {
   return (
     <AuthShell
       title="Entrar como estudio."
-      hint="Usuario y contraseña del estudio. Para la prueba: 2222 y 2222."
+      hint="Usuario y contraseña del estudio. Para la prueba: hema y 1234."
     >
       <form
         className="mx-auto w-full max-w-sm space-y-4"

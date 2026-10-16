@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -205,8 +206,13 @@ export function TeacherStudentAssign({
   }
 
   return (
-    <div className="mt-6 space-y-3">
-      <p className="text-sm text-muted-foreground">Alumnos de este profesor</p>
+    <div className="mt-6 space-y-3 border-t border-foreground/8 pt-5">
+      <div>
+        <p className="font-medium">Alumnos</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">
+          Asignados a {teacherName} en esta sucursal.
+        </p>
+      </div>
       <ul className="divide-y divide-foreground/8 overflow-hidden rounded-xl border border-foreground/8">
         {mine.length === 0 ? (
           <li className="px-3 py-2.5 text-sm text-muted-foreground">
@@ -374,60 +380,67 @@ export function ClientTeacherAssign({
           ? `Profesor: ${person.assignedTeacherName}`
           : "Sin profesor"}
       </p>
-      <div className="rounded-xl border border-foreground/8 p-3">
-        <p className="font-medium">
-          {person.assignedTeacherName
-            ? `Cambiar profesor de ${person.displayName}`
-            : `Asignar profesor a ${person.displayName}`}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Buscá por nombre entre los profesores de esta sucursal.
-        </p>
-        {options.length === 0 && !query.trim() ? (
-          <p className="mt-3 text-sm text-muted-foreground">
-            No hay otros profesores en esta sucursal.
-          </p>
-        ) : (
-          <div className="mt-3 space-y-3">
-            <AssignSearchList
-              searchId={`assign-teacher-${person.userId ?? person.code ?? "client"}`}
-              label="Nombre"
-              placeholder="Escribí el nombre"
-              query={query}
-              onQueryChange={(next) => {
-                setQuery(next);
-                setPick("");
-              }}
-              options={options.map((item) => ({
-                id: item.userId,
-                name: item.displayName,
-              }))}
-              pick={pick}
-              onPick={setPick}
-              emptyNone="No hay profesores para asignar."
-              emptySearch="Ningún profesor coincide con esa búsqueda."
-            />
+      <details className="group/assign rounded-xl border border-foreground/8">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-3 [&::-webkit-details-marker]:hidden">
+          <span className="min-w-0">
+            <span className="block font-medium">
+              {person.assignedTeacherName
+                ? "Cambiar profesor"
+                : "Asignar profesor"}
+            </span>
+            <span className="mt-0.5 block text-sm text-muted-foreground">
+              Buscá por nombre entre los de esta sucursal.
+            </span>
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground transition group-open/assign:rotate-180" />
+        </summary>
+        <div className="border-t border-foreground/8 px-3 pt-3 pb-3">
+          {options.length === 0 && !query.trim() ? (
+            <p className="text-sm text-muted-foreground">
+              No hay otros profesores en esta sucursal.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <AssignSearchList
+                searchId={`assign-teacher-${person.userId ?? person.code ?? "client"}`}
+                label="Nombre"
+                placeholder="Escribí el nombre"
+                query={query}
+                onQueryChange={(next) => {
+                  setQuery(next);
+                  setPick("");
+                }}
+                options={options.map((item) => ({
+                  id: item.userId,
+                  name: item.displayName,
+                }))}
+                pick={pick}
+                onPick={setPick}
+                emptyNone="No hay profesores para asignar."
+                emptySearch="Ningún profesor coincide con esa búsqueda."
+              />
+              <Button
+                className="h-11 px-5"
+                disabled={busy || !pick}
+                onClick={() => void assign()}
+              >
+                {busy ? "Asignando…" : "Asignar"}
+              </Button>
+            </div>
+          )}
+          {person.assignedTeacherUserId ? (
             <Button
-              className="h-11 px-5"
-              disabled={busy || !pick}
-              onClick={() => void assign()}
+              type="button"
+              variant="outline"
+              className="mt-3 h-10 px-4"
+              disabled={busy}
+              onClick={() => void unassign()}
             >
-              {busy ? "Asignando…" : "Asignar"}
+              Quitar profesor
             </Button>
-          </div>
-        )}
-      </div>
-      {person.assignedTeacherUserId ? (
-        <Button
-          type="button"
-          variant="outline"
-          className="h-10 px-4"
-          disabled={busy}
-          onClick={() => void unassign()}
-        >
-          Quitar profesor
-        </Button>
-      ) : null}
+          ) : null}
+        </div>
+      </details>
     </div>
   );
 }

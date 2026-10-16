@@ -431,21 +431,27 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
                     <ChevronDown className="mt-1 size-5 shrink-0 text-muted-foreground transition group-open:rotate-180" />
                   </summary>
                   <div className="border-t border-foreground/8 px-4 pt-3">
-                    <TeacherHoursEditor
-                      className="mt-0"
-                      dayHours={branch.dayHours}
-                      shifts={branch.shifts}
-                      saveLabel="Guardar horario"
-                      onSave={async (next) => {
-                        apply(
-                          await saveGymTeacherShifts({
-                            teacherUserId: teacher.userId,
-                            studioId: branch.studioId,
-                            shifts: next,
-                          })
-                        );
-                      }}
-                    />
+                    <div>
+                      <p className="font-medium">Días y horarios</p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">
+                        Cuándo trabaja en {branch.name}.
+                      </p>
+                      <TeacherHoursEditor
+                        className="mt-3"
+                        dayHours={branch.dayHours}
+                        shifts={branch.shifts}
+                        saveLabel="Guardar horario"
+                        onSave={async (next) => {
+                          apply(
+                            await saveGymTeacherShifts({
+                              teacherUserId: teacher.userId,
+                              studioId: branch.studioId,
+                              shifts: next,
+                            })
+                          );
+                        }}
+                      />
+                    </div>
                     <TeacherStudentAssign
                       studioId={branch.studioId}
                       teacherUserId={teacher.userId}
@@ -460,7 +466,7 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
                     <Button
                       type="button"
                       variant="outline"
-                      className="mt-4 h-11 px-4"
+                      className="mt-5 h-11 px-4"
                       disabled={busy}
                       onClick={() => void unassign(branch.studioId, branch.name)}
                     >

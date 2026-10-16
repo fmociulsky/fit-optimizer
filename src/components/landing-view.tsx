@@ -39,16 +39,16 @@ export function LandingView() {
             <Link
               key={entry.href}
               href={entry.href}
-              className="flex min-h-40 flex-col justify-between rounded-3xl border border-foreground/8 bg-card p-5 transition-colors hover:border-primary/40"
+              className="rounded-3xl border border-foreground/8 bg-card p-5 transition-colors hover:border-primary/40"
             >
-              <entry.icon className="size-5 text-primary" />
-              <span>
-                <span className="block font-heading text-3xl italic">
+              <span className="flex items-center gap-3">
+                <entry.icon className="size-5 shrink-0 text-primary" />
+                <span className="font-heading text-3xl italic leading-none">
                   {entry.title}
                 </span>
-                <span className="mt-1 block text-sm text-muted-foreground">
-                  {entry.text}
-                </span>
+              </span>
+              <span className="mt-1 block pl-8 text-sm text-muted-foreground">
+                {entry.text}
               </span>
             </Link>
           ))}

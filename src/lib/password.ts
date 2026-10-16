@@ -5,7 +5,7 @@ import { passwordClientError } from "@/lib/password-rules";
 export { PASSWORD_HINT, passwordClientError } from "@/lib/password-rules";
 
 const scryptAsync = promisify(scrypt);
-const RESERVED = new Set(["1234", "1111", "2222"]);
+const RESERVED = new Set(["hema", "1234", "1111"]);
 
 export function parseUsername(raw: string) {
   const username = raw.trim().toLowerCase();

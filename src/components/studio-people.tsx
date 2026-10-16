@@ -402,20 +402,23 @@ function StudioTeachersCard({
                       {person.phone}
                     </p>
                   ) : null}
-                  <p className="mb-2 text-sm text-muted-foreground">
-                    Días y horarios en esta sucursal
-                  </p>
-                  <TeacherHoursEditor
-                    className="mt-0"
-                    dayHours={dash.studio.dayHours}
-                    shifts={shifts}
-                    saveLabel="Guardar horario de este profesor"
-                    onSave={async (next) => {
-                      onChange(
-                        await saveTeacherShifts(dash.studio.id, teacherId, next)
-                      );
-                    }}
-                  />
+                  <div>
+                    <p className="font-medium">Días y horarios</p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      Cuándo trabaja en esta sucursal.
+                    </p>
+                    <TeacherHoursEditor
+                      className="mt-3"
+                      dayHours={dash.studio.dayHours}
+                      shifts={shifts}
+                      saveLabel="Guardar horario de este profesor"
+                      onSave={async (next) => {
+                        onChange(
+                          await saveTeacherShifts(dash.studio.id, teacherId, next)
+                        );
+                      }}
+                    />
+                  </div>
                   <TeacherStudentAssign
                     studioId={dash.studio.id}
                     teacherUserId={teacherId}
