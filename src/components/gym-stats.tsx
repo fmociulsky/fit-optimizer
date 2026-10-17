@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import {
   loadGymRevenueStats,
   seedGymClientBillingSamples,
+  type GymRevenueMonth,
   type GymRevenueStats,
 } from "@/lib/studio";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,15 @@ function formatMoney(amount: number) {
     currency: "ARS",
     maximumFractionDigits: 0,
   }).format(amount);
+}
+
+/** Meses en orden cronológico (más antiguo a la izquierda). */
+function chronological(months: GymRevenueMonth[]) {
+  return [...months].reverse();
+}
+
+function shortMonthLabel(label: string) {
+  return label.replace(".", "").split(" ")[0] ?? label;
 }
 
 export function GymStatsView() {
@@ -46,10 +56,20 @@ export function GymStatsView() {
     };
   }, [studioId]);
 
-  const maxTotal = useMemo(() => {
-    if (!stats?.months.length) return 1;
-    return Math.max(1, ...stats.months.map((item) => item.total));
-  }, [stats]);
+  const monthsAsc = useMemo(
+    () => (stats ? chronological(stats.months) : []),
+    [stats]
+  );
+
+  const maxTotal = useMemo(
+    () => Math.max(1, ...monthsAsc.map((item) => item.total)),
+    [monthsAsc]
+  );
+
+  const maxClients = useMemo(
+    () => Math.max(1, ...monthsAsc.map((item) => item.clients)),
+    [monthsAsc]
+  );
 
   if (loadError) {
     return (
@@ -83,8 +103,7 @@ export function GymStatsView() {
               Estadísticas.
             </h1>
             <p className="mt-3 max-w-xl text-muted-foreground">
-              Ingresos por mes según los cobros registrados. Filtrá por sucursal
-              para ver cada sede.
+              Ingresos y alumnos por mes. Filtrá por sucursal para ver cada sede.
             </p>
           </div>
           <div className="space-y-1.5 sm:w-56">
@@ -105,7 +124,7 @@ export function GymStatsView() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Ingresos (12 meses)"
             value={formatMoney(stats.total)}
@@ -113,6 +132,10 @@ export function GymStatsView() {
           <StatCard
             label={thisMonth ? `Este mes (${thisMonth.label})` : "Este mes"}
             value={formatMoney(thisMonth?.total ?? 0)}
+          />
+          <StatCard
+            label="Alumnos"
+            value={String(stats.clientCount)}
           />
           <StatCard
             label="Pagos pendientes este mes"
@@ -132,47 +155,32 @@ export function GymStatsView() {
         <section className="rounded-3xl border border-foreground/8 bg-card p-5">
           <h2 className="font-heading text-2xl italic">Ingresos por mes</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Últimos 12 meses · el más actual arriba
+            Últimos 12 meses
             {studioId === "all" ? " · todas las sucursales" : ""}.
           </p>
-          <ul className="mt-6 space-y-3">
-            {stats.months.map((month) => {
-              const width = Math.round((month.total / maxTotal) * 100);
-              return (
-                <li
-                  key={month.key}
-                  className="grid gap-1 sm:grid-cols-[6.5rem_1fr_auto] sm:items-center sm:gap-3"
-                >
-                  <p className="text-sm capitalize text-muted-foreground">
-                    {month.label}
-                  </p>
-                  <div className="h-8 overflow-hidden rounded-full bg-foreground/[0.04]">
-                    <div
-                      className={cn(
-                        "h-full rounded-full bg-primary/80 transition-all",
-                        month.total === 0 && "bg-transparent"
-                      )}
-                      style={{
-                        width: `${Math.max(month.total ? 4 : 0, width)}%`,
-                      }}
-                    />
-                  </div>
-                  <div className="text-right text-sm">
-                    <p className="font-medium tabular-nums">
-                      {formatMoney(month.total)}
-                    </p>
-                    <p className="text-muted-foreground">
-                      {month.payments === 0
-                        ? "Sin cobros"
-                        : month.payments === 1
-                          ? "1 cobro"
-                          : `${month.payments} cobros`}
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+          <VerticalBarChart
+            className="mt-6"
+            items={monthsAsc.map((month) => ({
+              key: month.key,
+              label: shortMonthLabel(month.label),
+              value: month.total,
+              tip: `${month.label}: ${formatMoney(month.total)} · ${
+                month.payments === 0
+                  ? "sin cobros"
+                  : month.payments === 1
+                    ? "1 cobro"
+                    : `${month.payments} cobros`
+              }`,
+            }))}
+            max={maxTotal}
+            formatValue={(value) =>
+              value >= 1_000_000
+                ? `${Math.round(value / 100_000) / 10}M`
+                : value >= 1000
+                  ? `${Math.round(value / 1000)}k`
+                  : String(value)
+            }
+          />
           {stats.total === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">
               Todavía no hay cobros en este filtro. Cargá montos en Cuentas o
@@ -180,7 +188,90 @@ export function GymStatsView() {
             </p>
           ) : null}
         </section>
+
+        <section className="rounded-3xl border border-foreground/8 bg-card p-5">
+          <h2 className="font-heading text-2xl italic">Alumnos por mes</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Total acumulado al cierre de cada mes
+            {studioId === "all" ? " · todas las sucursales" : ""}.
+          </p>
+          <VerticalBarChart
+            className="mt-6"
+            tone="secondary"
+            items={monthsAsc.map((month) => ({
+              key: month.key,
+              label: shortMonthLabel(month.label),
+              value: month.clients,
+              tip: `${month.label}: ${
+                month.clients === 1
+                  ? "1 alumno"
+                  : `${month.clients} alumnos`
+              }`,
+            }))}
+            max={maxClients}
+            formatValue={(value) => String(value)}
+          />
+          {stats.clientCount === 0 ? (
+            <p className="mt-4 text-sm text-muted-foreground">
+              Todavía no hay alumnos en este filtro.
+            </p>
+          ) : null}
+        </section>
       </main>
+    </div>
+  );
+}
+
+function VerticalBarChart({
+  items,
+  max,
+  formatValue,
+  className,
+  tone = "primary",
+}: {
+  items: { key: string; label: string; value: number; tip: string }[];
+  max: number;
+  formatValue: (value: number) => string;
+  className?: string;
+  tone?: "primary" | "secondary";
+}) {
+  return (
+    <div className={cn("overflow-x-auto", className)}>
+      <div
+        className="flex h-52 min-w-[28rem] items-end gap-1.5 sm:gap-2"
+        role="img"
+        aria-label="Gráfico de barras"
+      >
+        {items.map((item) => {
+          const height = Math.round((item.value / max) * 100);
+          return (
+            <div
+              key={item.key}
+              className="flex min-w-0 flex-1 flex-col items-center gap-1.5"
+              title={item.tip}
+            >
+              <p className="text-[10px] tabular-nums text-muted-foreground sm:text-xs">
+                {item.value > 0 ? formatValue(item.value) : ""}
+              </p>
+              <div className="flex h-40 w-full items-end justify-center">
+                <div
+                  className={cn(
+                    "w-full max-w-10 rounded-t-md transition-all",
+                    tone === "primary" ? "bg-primary/80" : "bg-chart-2/70",
+                    item.value === 0 && "bg-foreground/10"
+                  )}
+                  style={{
+                    height: `${Math.max(item.value > 0 ? 6 : 2, height)}%`,
+                  }}
+                />
+              </div>
+              <p className="truncate text-[10px] capitalize text-muted-foreground sm:text-xs">
+                {item.label}
+              </p>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

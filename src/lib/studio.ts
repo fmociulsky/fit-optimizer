@@ -841,6 +841,7 @@ export type StudioPerson = {
   sessionsPerWeek: number | null;
   assignedTeacherUserId: string | null;
   assignedTeacherName: string | null;
+  hasPlan: boolean;
   code?: string;
   pending: boolean;
 };
@@ -942,6 +943,21 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
     }
   }
 
+  const clientMemberIds = members
+    .filter((item) => item.role === "client")
+    .map((item) => item.userId);
+  const clientStates = clientMemberIds.length
+    ? await db
+        .select({ userId: userStates.userId, payload: userStates.payload })
+        .from(userStates)
+        .where(inArray(userStates.userId, clientMemberIds))
+    : [];
+  const planByUser = new Map(
+    clientStates.map(
+      (row) => [row.userId, hasPlanFromPayload(row.payload)] as const
+    )
+  );
+
   const people: StudioPerson[] = [
     ...members
       .filter((item) => item.role !== "owner")
@@ -959,6 +975,10 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
         assignedTeacherName: item.assignedTeacherUserId
           ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
           : null,
+        hasPlan:
+          item.role === "client"
+            ? (planByUser.get(item.userId) ?? false)
+            : false,
         pending: false,
       })),
     ...invites.map((item) => ({
@@ -975,6 +995,7 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
       assignedTeacherName: item.assignedTeacherUserId
         ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
         : null,
+      hasPlan: false,
       code: item.code,
       pending: true,
     })),
@@ -1465,8 +1486,21 @@ export type GymClientSummary = {
   studioName: string;
   assignedTeacherUserId: string | null;
   teacherName: string | null;
+  hasPlan: boolean;
   reservations: { weekday: number; slotStart: string }[];
 };
+
+function hasPlanFromPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") return false;
+  const obj = payload as { state?: AppState };
+  const state =
+    obj.state?.profile && obj.state.plan
+      ? obj.state
+      : (payload as AppState).profile && (payload as AppState).plan
+        ? (payload as AppState)
+        : null;
+  return planHasExercises(state);
+}
 
 export async function listGymClients(): Promise<GymClientSummary[]> {
   const { branches } = await requireOwnedGym();
@@ -1520,6 +1554,14 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
   const usernameById = new Map(
     accountRows.map((item) => [item.userId, item.username ?? ""] as const)
   );
+  const clientIds = [...new Set(members.map((item) => item.userId))];
+  const states = await db
+    .select({ userId: userStates.userId, payload: userStates.payload })
+    .from(userStates)
+    .where(inArray(userStates.userId, clientIds));
+  const planByUser = new Map(
+    states.map((row) => [row.userId, hasPlanFromPayload(row.payload)] as const)
+  );
   return members
     .map((item) => ({
       userId: item.userId,
@@ -1541,6 +1583,7 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
             `${item.studioId}:${item.assignedTeacherUserId}`
           ) ?? null)
         : null,
+      hasPlan: planByUser.get(item.userId) ?? false,
       reservations: reservations
         .filter(
           (row) =>
@@ -1965,6 +2008,8 @@ export type GymRevenueMonth = {
   label: string;
   total: number;
   payments: number;
+  /** Alumnos con alta hasta el cierre de ese mes. */
+  clients: number;
 };
 
 export type GymRevenueStats = {
@@ -1972,6 +2017,7 @@ export type GymRevenueStats = {
   months: GymRevenueMonth[];
   total: number;
   paymentCount: number;
+  clientCount: number;
   branches: { id: string; name: string }[];
   pendingTotal: number;
 };
@@ -1991,6 +2037,7 @@ export async function loadGymRevenueStats(
       months: [],
       total: 0,
       paymentCount: 0,
+      clientCount: 0,
       branches: [],
       pendingTotal: 0,
     };
@@ -2085,15 +2132,22 @@ export async function loadGymRevenueStats(
     studioId: selected,
     months: keys.map((key) => {
       const bucket = byMonth.get(key)!;
+      const [y, m] = key.split("-").map(Number);
+      const monthClose = new Date(y!, m!, 0, 23, 59, 59, 999);
+      const clients = members.filter(
+        (member) => member.createdAt.getTime() <= monthClose.getTime()
+      ).length;
       return {
         key,
         label: monthLabel(key),
         total: bucket.total,
         payments: bucket.payments,
+        clients,
       };
     }),
     total,
     paymentCount,
+    clientCount: members.length,
     branches: branchList,
     pendingTotal,
   };

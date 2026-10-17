@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { ChevronDown, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { SearchCreateBar } from "@/components/search-create-bar";
@@ -17,11 +18,12 @@ import {
 } from "@/components/studio-client-form";
 import { TeacherHoursEditor } from "@/components/teacher-hours-editor";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SEX_LABEL, studioKindsLabel, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
+import { cn } from "@/lib/utils";
 import {
   assignTeacherToBranch,
   createStudioTeacher,
@@ -35,7 +37,6 @@ import {
   type StudioPerson,
 } from "@/lib/studio";
 import type { Sex } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 function weekdayLabel(id: number) {
   return WEEKDAYS.find((item) => item.id === id)?.full ?? "Día";
@@ -528,6 +529,7 @@ function StudioClientsCard({
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<StudioClientDraft | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const teachers = dash.people.filter(
     (item) => item.role === "teacher" && item.userId
   );
@@ -639,9 +641,17 @@ function StudioClientsCard({
                     a.slotStart.localeCompare(b.slotStart)
                 )
             : [];
+          const rowId = person.userId ?? person.code ?? "";
           return (
-            <li key={person.userId ?? person.code}>
-              <details className="group">
+            <li key={rowId}>
+              <details
+                className="group"
+                open={openId === rowId}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) setOpenId(rowId);
+                  else if (openId === rowId) setOpenId(null);
+                }}
+              >
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
                   <p className="min-w-0 flex-1 truncate font-medium">
                     {person.displayName}
@@ -659,24 +669,28 @@ function StudioClientsCard({
                 </summary>
                 <div className="space-y-3 border-t border-foreground/8 px-4 pt-3 pb-4">
                   {person.email ? (
-                    <p className="text-sm text-muted-foreground">{person.email}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Email: {person.email}
+                    </p>
                   ) : null}
                   {person.username ? (
                     <p className="text-sm text-muted-foreground">
-                      Usuario {person.username}
+                      Usuario: {person.username}
                     </p>
                   ) : null}
                   {person.phone ? (
-                    <p className="text-sm text-muted-foreground">{person.phone}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Teléfono: {person.phone}
+                    </p>
                   ) : null}
                   {person.birthDate ? (
                     <p className="text-sm text-muted-foreground">
-                      Nacimiento{" "}
+                      Nacimiento:{" "}
                       {person.birthDate.split("-").reverse().join("/")}
                     </p>
                   ) : null}
                   <p className="text-sm text-muted-foreground">
-                    {studioKindsLabel(person.activities)}
+                    Actividad: {studioKindsLabel(person.activities)}
                   </p>
                   {person.pending && person.code ? (
                     <div className="flex flex-wrap items-center gap-2">
@@ -735,6 +749,28 @@ function StudioClientsCard({
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {person.userId ? (
+                      person.hasPlan ? (
+                        <Link
+                          href={`/estudio/alumnos/${encodeURIComponent(person.userId)}?desde=${encodeURIComponent(`/estudio/${dash.studio.id}/alumnos`)}`}
+                          className={cn(
+                            buttonVariants({ variant: "outline" }),
+                            "h-10 px-4"
+                          )}
+                        >
+                          Ver plan
+                        </Link>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 px-4"
+                          disabled
+                        >
+                          Ver plan
+                        </Button>
+                      )
+                    ) : null}
                     {person.userId && (
                       <Button
                         type="button"

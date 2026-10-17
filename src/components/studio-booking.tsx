@@ -63,7 +63,7 @@ function SlotBody({
   return (
     <div className="space-y-1">
       {selected ? (
-        <p className="text-[11px] font-semibold tracking-wide text-chart-2 sm:text-xs">
+        <p className="text-[11px] font-semibold tracking-wide text-primary sm:text-xs">
           Tu horario
         </p>
       ) : null}
@@ -441,7 +441,7 @@ export function StudioBooking() {
                                 className={cn(
                                   "flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-left",
                                   mineHere
-                                    ? "border-chart-2/40 bg-chart-2/15"
+                                    ? "border-2 border-primary bg-primary/10 shadow-[0_0_0_1px] shadow-primary/40"
                                     : blocked
                                       ? "border-transparent bg-muted/50 text-muted-foreground"
                                       : "border-foreground/8 bg-card"
@@ -514,12 +514,12 @@ export function StudioBooking() {
                         !cell || full || !teacher || !hasTeacher;
                       const teachers = teachersInSlot(cell, teacher?.userId);
                       const chrome = cn(
-                        "min-h-[3.4rem] rounded-xl px-1.5 py-2 text-left ring-1",
+                        "min-h-[3.4rem] rounded-xl px-1.5 py-2 text-left",
                         mineHere
-                          ? "bg-chart-2/18 ring-chart-2/40"
+                          ? "border-2 border-primary bg-primary/10 shadow-[0_0_0_1px] shadow-primary/40"
                           : blocked
-                            ? "bg-muted/60 text-muted-foreground ring-transparent"
-                            : "bg-card ring-foreground/10"
+                            ? "bg-muted/60 text-muted-foreground ring-1 ring-transparent"
+                            : "bg-card ring-1 ring-foreground/10"
                       );
                       const body = (
                         <SlotBody

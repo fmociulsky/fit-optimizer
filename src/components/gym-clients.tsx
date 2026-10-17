@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { BackLink } from "@/components/back-link";
@@ -12,7 +13,7 @@ import {
   StudioClientForm,
   type StudioClientDraft,
 } from "@/components/studio-client-form";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { studioKindsLabel, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
 import {
@@ -23,6 +24,7 @@ import {
   type GymClientSummary,
   type StudioDashboard,
 } from "@/lib/studio";
+import { cn } from "@/lib/utils";
 
 const fieldClass =
   "h-11 w-full rounded-lg border border-input bg-transparent px-2.5 text-base md:text-sm";
@@ -43,6 +45,7 @@ export function GymClientsView() {
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<StudioClientDraft | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
 
   async function refreshClients() {
@@ -77,6 +80,7 @@ export function GymClientsView() {
     }
     let cancelled = false;
     setDash(null);
+    setOpenId(null);
     void loadStudioDashboard(studioId)
       .then((next) => {
         if (!cancelled) setDash(next);
@@ -235,9 +239,18 @@ export function GymClientsView() {
                 : "Ningún alumno coincide con esa búsqueda."}
             </li>
           )}
-          {visible.map((client) => (
-            <li key={`${client.studioId}:${client.userId}`}>
-              <details className="group">
+          {visible.map((client) => {
+            const rowId = `${client.studioId}:${client.userId}`;
+            return (
+            <li key={rowId}>
+              <details
+                className="group"
+                open={openId === rowId}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) setOpenId(rowId);
+                  else if (openId === rowId) setOpenId(null);
+                }}
+              >
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
                   <p className="min-w-0 flex-1 truncate font-medium">
                     {client.displayName}
@@ -252,18 +265,22 @@ export function GymClientsView() {
                 </summary>
                 <div className="space-y-3 border-t border-foreground/8 px-4 pt-3 pb-4">
                   {client.email ? (
-                    <p className="text-sm text-muted-foreground">{client.email}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Email: {client.email}
+                    </p>
                   ) : null}
                   {client.username ? (
                     <p className="text-sm text-muted-foreground">
-                      Usuario {client.username}
+                      Usuario: {client.username}
                     </p>
                   ) : null}
                   {client.phone ? (
-                    <p className="text-sm text-muted-foreground">{client.phone}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Teléfono: {client.phone}
+                    </p>
                   ) : null}
                   <p className="text-sm text-muted-foreground">
-                    {studioKindsLabel(client.activities)}
+                    Actividad: {studioKindsLabel(client.activities)}
                   </p>
                   {dash ? (
                     <ClientTeacherAssign
@@ -319,6 +336,26 @@ export function GymClientsView() {
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {client.hasPlan ? (
+                      <Link
+                        href={`/estudio/alumnos/${encodeURIComponent(client.userId)}?desde=${encodeURIComponent("/estudio/alumnos")}`}
+                        className={cn(
+                          buttonVariants({ variant: "outline" }),
+                          "h-10 px-4"
+                        )}
+                      >
+                        Ver plan
+                      </Link>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 px-4"
+                        disabled
+                      >
+                        Ver plan
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="outline"
@@ -342,7 +379,8 @@ export function GymClientsView() {
                 </div>
               </details>
             </li>
-          ))}
+            );
+          })}
         </ul>
       </main>
     </div>

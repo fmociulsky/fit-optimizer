@@ -542,6 +542,126 @@ export async function loadCoachClient(
   };
 }
 
+export type StudioClientPlanDetail = {
+  clientUserId: string;
+  displayName: string;
+  teacherName: string | null;
+  studioNames: string[];
+  profile: Profile;
+  goal: Goal;
+  weeklySplit: WorkoutDay[];
+  hasPlan: boolean;
+  loadedByName: string | null;
+};
+
+/** Plan de entrenamiento de un alumno, solo lectura para el estudio. */
+export async function loadStudioClientPlan(
+  clientUserId: string
+): Promise<StudioClientPlanDetail> {
+  const ownerId = await requireUserId();
+  const db = getDb();
+  const owned = await db
+    .select({ id: studios.id, name: studios.name })
+    .from(studios)
+    .where(eq(studios.ownerUserId, ownerId));
+  if (!owned.length) {
+    throw new Error("No hay un gimnasio a tu nombre.");
+  }
+  const studioIds = owned.map((item) => item.id);
+  const memberships = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        eq(studioMemberships.userId, clientUserId),
+        eq(studioMemberships.role, "client"),
+        inArray(studioMemberships.studioId, studioIds)
+      )
+    );
+  if (!memberships.length) {
+    throw new Error("Ese alumno no está en tu gimnasio.");
+  }
+  const [account] = await db
+    .select({ name: accounts.name })
+    .from(accounts)
+    .where(eq(accounts.userId, clientUserId))
+    .limit(1);
+  const displayName =
+    memberships.find((item) => item.displayName.trim())?.displayName.trim() ||
+    account?.name?.trim() ||
+    "Alumno";
+  const teacherIds = [
+    ...new Set(
+      memberships
+        .map((item) => item.assignedTeacherUserId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  let teacherName: string | null = null;
+  if (teacherIds.length) {
+    const teachers = await db
+      .select({
+        userId: studioMemberships.userId,
+        displayName: studioMemberships.displayName,
+      })
+      .from(studioMemberships)
+      .where(
+        and(
+          inArray(studioMemberships.userId, teacherIds),
+          eq(studioMemberships.role, "teacher"),
+          inArray(studioMemberships.studioId, studioIds)
+        )
+      );
+    teacherName =
+      teachers.find((item) => item.displayName.trim())?.displayName.trim() ||
+      null;
+    if (!teacherName) {
+      const [teacherAccount] = await db
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.userId, teacherIds[0]!))
+        .limit(1);
+      teacherName = teacherAccount?.name?.trim() || null;
+    }
+  }
+  const [row] = await db
+    .select()
+    .from(userStates)
+    .where(eq(userStates.userId, clientUserId))
+    .limit(1);
+  const state = parseState(row?.payload);
+  const studioNames = owned
+    .filter((studio) =>
+      memberships.some((member) => member.studioId === studio.id)
+    )
+    .map((studio) => studio.name)
+    .filter(Boolean);
+  if (!state) {
+    return {
+      clientUserId,
+      displayName,
+      teacherName,
+      studioNames,
+      profile: defaultCoachLedProfile({ name: displayName }),
+      goal: DEFAULT_COACH_GOAL,
+      weeklySplit: [],
+      hasPlan: false,
+      loadedByName: null,
+    };
+  }
+  return {
+    clientUserId,
+    displayName: state.profile.name.trim() || displayName,
+    teacherName,
+    studioNames,
+    profile: state.profile,
+    goal: state.goal,
+    weeklySplit: state.plan.weeklySplit,
+    hasPlan: planHasExercises(state),
+    loadedByName: state.plan.loadedBy?.name?.trim() || null,
+  };
+}
+
 async function teacherDisplayName(userId: string) {
   const db = getDb();
   const [member] = await db
