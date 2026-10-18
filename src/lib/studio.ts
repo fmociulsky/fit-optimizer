@@ -34,6 +34,7 @@ import {
 import {
   hashPassword,
   parseUsername,
+  TEST_ACCOUNT_PASSWORD,
   usernameFromEmail,
 } from "@/lib/password";
 import { getSessionUserId } from "@/lib/session";
@@ -270,7 +271,7 @@ async function createTeacherAccount(input: {
     role: "professional",
     name: input.displayName,
     username,
-    passwordHash: await hashPassword("1234"),
+    passwordHash: await hashPassword(TEST_ACCOUNT_PASSWORD),
     code: await uniqueProfessionalAccountCode(),
     linkedProfessionalId: null,
     createdAt: now,
@@ -315,7 +316,7 @@ async function createClientAccount(input: { displayName: string; email: string }
     name: input.displayName,
     email: input.email,
     username,
-    passwordHash: await hashPassword("1234"),
+    passwordHash: await hashPassword(TEST_ACCOUNT_PASSWORD),
     code: await uniqueClientAccountCode(),
     linkedProfessionalId: null,
     createdAt: now,
@@ -843,6 +844,10 @@ export type StudioPerson = {
   assignedTeacherName: string | null;
   active: boolean;
   hasPlan: boolean;
+  planName: string;
+  feeAmount: number | null;
+  serviceEndsOn: string;
+  lastPaidOn: string;
   code?: string;
   pending: boolean;
 };
@@ -1005,6 +1010,11 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
           item.role === "client"
             ? (planByUser.get(item.userId) ?? false)
             : false,
+        planName: item.role === "client" ? (item.planName ?? "") : "",
+        feeAmount: item.role === "client" ? (item.feeAmount ?? null) : null,
+        serviceEndsOn:
+          item.role === "client" ? (item.serviceEndsOn ?? "") : "",
+        lastPaidOn: item.role === "client" ? (item.lastPaidOn ?? "") : "",
         pending: false,
       })),
     ...invites.map((item) => ({
@@ -1023,6 +1033,10 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
         : null,
       active: true,
       hasPlan: false,
+      planName: "",
+      feeAmount: null as number | null,
+      serviceEndsOn: "",
+      lastPaidOn: "",
       code: item.code,
       pending: true,
     })),
@@ -1251,7 +1265,7 @@ export async function createStudioInvite(input: {
 
 function parseBillingPlan(raw: string): ClientBillingPlan {
   const plan = parseClientBillingPlan(raw);
-  if (!plan) throw new Error("Elegí un plan: mensual, trimestral o anual.");
+  if (!plan) throw new Error("Elegí un plan de pago: mensual, trimestral o anual.");
   return plan;
 }
 
@@ -1283,7 +1297,7 @@ export async function createStudioClient(input: {
   const billingPlan = parseBillingPlan(input.billingPlan);
   const feeAmount = parseFeeAmount(input.feeAmount);
   if (feeAmount === null || feeAmount <= 0) {
-    throw new Error("Pon el valor del plan.");
+    throw new Error("Pon el valor del plan de pago.");
   }
   const serviceStartsOn = parseOptionalYmd(
     input.serviceStartsOn,
@@ -1528,6 +1542,10 @@ export type GymClientSummary = {
   assignedTeacherUserId: string | null;
   teacherName: string | null;
   hasPlan: boolean;
+  planName: string;
+  feeAmount: number | null;
+  serviceEndsOn: string;
+  lastPaidOn: string;
   reservations: { weekday: number; slotStart: string }[];
 };
 
@@ -1625,6 +1643,10 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
           ) ?? null)
         : null,
       hasPlan: planByUser.get(item.userId) ?? false,
+      planName: item.planName ?? "",
+      feeAmount: item.feeAmount ?? null,
+      serviceEndsOn: item.serviceEndsOn ?? "",
+      lastPaidOn: item.lastPaidOn ?? "",
       reservations: reservations
         .filter(
           (row) =>

@@ -86,15 +86,12 @@ function zonesLabel(areas?: (keyof typeof FOCUS_AREA_LABEL)[] | null) {
 
 function teacherPendingPlanCopy(
   teacherName: string | null,
-  teacherSex: Sex | null,
-  kind: "plan" | "ejercicios"
+  teacherSex: Sex | null
 ) {
   const role = teacherRoleWord(teacherSex);
   const name = teacherName?.trim();
   const who = name ? `Tu ${role} ${name}` : `Tu ${role}`;
-  const what =
-    kind === "ejercicios" ? "el plan de ejercicios" : "el plan";
-  return `${who} todavía no cargó ${what}. Cuando lo haga, las sesiones aparecen acá.`;
+  return `${who} todavía no cargó el plan de entrenamiento. Cuando lo haga, las sesiones aparecen acá.`;
 }
 
 export function DashboardView() {
@@ -146,14 +143,10 @@ export function DashboardView() {
               Alumno
             </p>
             <h1 className="mt-1 font-heading text-4xl tracking-tight italic sm:text-5xl">
-              Tu plan.
+              Tu plan de entrenamiento.
             </h1>
             <p className="mt-3 max-w-xl text-muted-foreground">
-              {teacherPendingPlanCopy(
-                assignedTeacher,
-                assignedTeacherSex,
-                "plan"
-              )}
+              {teacherPendingPlanCopy(assignedTeacher, assignedTeacherSex)}
             </p>
             <Link
               href="/turnos"
@@ -173,7 +166,7 @@ export function DashboardView() {
     }
     return (
       <div className="flex min-h-svh items-center justify-center text-muted-foreground">
-        Cargando tu plan…
+        Cargando tu plan de entrenamiento…
       </div>
     );
   }
@@ -202,7 +195,7 @@ export function DashboardView() {
         <SiteHeader />
         <main className="mx-auto w-full max-w-xl px-4 py-10">
           <p className="text-sm font-medium tracking-wide text-primary uppercase">
-            Tu plan
+            Tu plan de entrenamiento
           </p>
           <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
             Un aviso, {firstName}.
@@ -255,7 +248,7 @@ export function DashboardView() {
               <p className="mt-3 flex items-center gap-2 text-sm">
                 <GraduationCap className="size-4 shrink-0 text-primary" />
                 <span>
-                  Plan cargado por{" "}
+                  Plan de entrenamiento cargado por{" "}
                   <span className="font-medium">{planTeacher}</span>
                 </span>
               </p>
@@ -316,8 +309,7 @@ export function DashboardView() {
           <div className="mt-6 rounded-2xl border border-foreground/8 bg-card p-4 text-sm leading-relaxed text-muted-foreground">
             {teacherPendingPlanCopy(
               savedTeacher || assignedTeacher,
-              assignedTeacherSex,
-              "ejercicios"
+              assignedTeacherSex
             )}
           </div>
         )}
@@ -327,7 +319,7 @@ export function DashboardView() {
             <TabsTrigger value="hoy">Hoy</TabsTrigger>
             <TabsTrigger value="semana">Semana</TabsTrigger>
             <TabsTrigger value="avance">Avance</TabsTrigger>
-            <TabsTrigger value="plan">Por qué este plan</TabsTrigger>
+            <TabsTrigger value="plan">Por qué este plan de entrenamiento</TabsTrigger>
           </TabsList>
 
           <TabsContent value="hoy" className="mt-6 space-y-4">
@@ -676,7 +668,7 @@ export function DashboardView() {
               {state.profile.equipment === "pilates" && (
                 <p className="mt-2 text-sm">
                   {pilatesItemNames(state.profile.pilatesItems).join(" · ") ||
-                    "Aún no marcaste el material de pilates. Reconfigura el plan."}
+                    "Aún no marcaste el material de pilates. Reconfigura el plan de entrenamiento."}
                 </p>
               )}
               {state.profile.equipment !== "full_gym" &&
@@ -684,14 +676,14 @@ export function DashboardView() {
                 state.profile.equipment !== "pilates" && (
                   <p className="mt-2 text-sm">
                     {homeItemNames(state.profile.homeItems).join(" · ") ||
-                      "Aún no marcaste lo de casa. Reconfigura el plan."}
+                      "Aún no marcaste lo de casa. Reconfigura el plan de entrenamiento."}
                   </p>
                 )}
               {coachLed && (
                 <p className="mt-2 text-sm">
                   {planTeacher
-                    ? `Plan cargado por ${planTeacher}.`
-                    : "El plan físico lo carga tu profesor."}
+                    ? `Plan de entrenamiento cargado por ${planTeacher}.`
+                    : "El plan de entrenamiento lo carga tu profesor."}
                 </p>
               )}
             </div>

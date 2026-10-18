@@ -119,11 +119,15 @@ export function ProfessionalHome() {
                       <p className="mt-1 text-sm text-muted-foreground">
                         {daysSummary(client)}
                         {" · "}
-                        {client.hasPlan ? "Plan cargado" : "Sin plan"}
+                        {client.hasPlan
+                          ? "Plan de entrenamiento cargado"
+                          : "Sin plan de entrenamiento"}
                       </p>
                     </div>
                     <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-primary">
-                      {client.hasPlan ? "Editar plan" : "Cargar plan"}
+                      {client.hasPlan
+                        ? "Editar plan de entrenamiento"
+                        : "Cargar plan de entrenamiento"}
                       <ChevronRight className="size-4" />
                     </span>
                   </Link>

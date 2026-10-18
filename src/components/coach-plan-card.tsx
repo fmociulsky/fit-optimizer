@@ -70,10 +70,10 @@ export function CoachPlanCard({
           </p>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             {requested
-              ? `Solicitud enviada${requestedAt ? ` el ${formatDate(requestedAt)}` : ""}. Cuando tu profesor arme el plan, las sesiones aparecen aquí.`
+              ? `Solicitud enviada${requestedAt ? ` el ${formatDate(requestedAt)}` : ""}. Cuando tu profesor arme el plan de entrenamiento, las sesiones aparecen aquí.`
               : linked
-                ? `Vinculado con ${linkedCode}. Tu profesor puede armar el plan con Enforma o escribirlo a mano.`
-                : "Pide el código a tu profesor (empieza por ENF-). Con eso le llega el pedido de plan."}
+                ? `Vinculado con ${linkedCode}. Tu profesor puede armar el plan de entrenamiento con Enforma o escribirlo a mano.`
+                : "Pide el código a tu profesor (empieza por ENF-). Con eso le llega el pedido de plan de entrenamiento."}
           </p>
           {onLink && !linked && (
             <div className="mt-4 space-y-2">

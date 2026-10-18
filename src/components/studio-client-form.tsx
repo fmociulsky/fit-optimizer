@@ -176,16 +176,16 @@ export function StudioClientForm({
     let parsedFee = 0;
     if (!initial) {
       if (!billingPlan) {
-        toast.error("Elegí el plan: mensual, trimestral o anual.");
+        toast.error("Elegí el plan de pago: mensual, trimestral o anual.");
         return;
       }
       parsedFee = Number.parseInt(feeAmount.replace(/\D/g, ""), 10);
       if (!Number.isFinite(parsedFee) || parsedFee <= 0) {
-        toast.error("Pon el valor del plan.");
+        toast.error("Pon el valor del plan de pago.");
         return;
       }
       if (!serviceStartsOn) {
-        toast.error("Pon el día de inicio del plan.");
+        toast.error("Pon el día de inicio del plan de pago.");
         return;
       }
     }
@@ -225,7 +225,11 @@ export function StudioClientForm({
         setFeeAmount("");
         setServiceStartsOn(todayBillingYmd());
       }
-      toast.success(initial ? "Alumno actualizado." : "Alumno creado.");
+      toast.success(
+        initial
+          ? "Alumno actualizado."
+          : "Alumno creado. Entra con su email y contraseña 1234."
+      );
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -240,7 +244,8 @@ export function StudioClientForm({
           <p className="font-medium">{editing ? "Editar alumno" : "Nuevo alumno"}</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Datos personales, plan de pago, actividad, cuántos días va y los
-            horarios por defecto dentro de la apertura de la sucursal.
+            horarios por defecto. En modo prueba entra con email y contraseña
+            1234.
           </p>
         </>
       ) : null}
@@ -359,7 +364,7 @@ export function StudioClientForm({
         {!editing ? (
           <>
             <div className="space-y-1.5 sm:col-span-2">
-              <Label>Plan</Label>
+              <Label>Plan de pago</Label>
               <div className="grid grid-cols-3 gap-2">
                 {CLIENT_BILLING_PLANS.map((plan) => (
                   <button
@@ -379,7 +384,7 @@ export function StudioClientForm({
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="client-fee">Valor del plan (ARS)</Label>
+              <Label htmlFor="client-fee">Valor del plan de pago (ARS)</Label>
               <Input
                 id="client-fee"
                 className="h-11 text-base"
@@ -408,7 +413,7 @@ export function StudioClientForm({
                       month: "long",
                       year: "numeric",
                     }).format(new Date(`${serviceEndsOn}T12:00:00`))
-                  : "Elegí plan e inicio"}
+                  : "Elegí plan de pago e inicio"}
               </p>
             </div>
           </>
@@ -427,6 +432,7 @@ export function StudioClientForm({
             activities={activities.length ? activities : studioKinds}
             value={picks}
             committed={initial?.picks ?? []}
+            assignedTeacherId={chosenTeacher || null}
             onChange={setPicks}
           />
         </div>
@@ -457,7 +463,7 @@ export function StudioClientForm({
             disabled={busy}
             onClick={onCancel}
           >
-            Cerrar
+            {editing ? "Cerrar" : "Cancelar"}
           </Button>
         ) : null}
       </div>

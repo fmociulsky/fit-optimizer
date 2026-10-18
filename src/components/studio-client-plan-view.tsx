@@ -37,7 +37,7 @@ export function StudioClientPlanView({
           setError(
             caught instanceof Error
               ? caught.message
-              : "No se pudo cargar el plan."
+              : "No se pudo cargar el plan de entrenamiento."
           );
         }
       });
@@ -84,7 +84,7 @@ export function StudioClientPlanView({
       <main className="mx-auto w-full max-w-2xl px-4 py-8">
         <BackLink href={backHref}>Volver a alumnos</BackLink>
         <p className="text-sm font-medium tracking-wide text-primary uppercase">
-          Plan del alumno
+          Plan de entrenamiento
         </p>
         <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
           {detail.displayName}.

@@ -242,7 +242,9 @@ export function ProfessionalPlanEditor({ clientId }: { clientId: string }) {
         emptyDay(day.weekday, detail.profile.sessionMinutes, day.id)
       )
     );
-    toast.success("Plan vacío. Puedes escribirlo o pedir una propuesta.");
+    toast.success(
+      "Plan de entrenamiento vacío. Puedes escribirlo o pedir una propuesta."
+    );
   }
 
   async function save() {
@@ -280,7 +282,9 @@ export function ProfessionalPlanEditor({ clientId }: { clientId: string }) {
         medicalFlags,
         medicalNotes: medicalNotes.trim(),
       });
-      toast.success("Plan cargado. El alumno ya puede ver las sesiones.");
+      toast.success(
+        "Plan de entrenamiento cargado. El alumno ya puede ver las sesiones."
+      );
       router.push("/profesor/alumnos");
     } catch (caught) {
       setError(
@@ -330,7 +334,9 @@ export function ProfessionalPlanEditor({ clientId }: { clientId: string }) {
       <main className="mx-auto w-full max-w-2xl px-4 py-8">
         <BackLink href="/profesor/alumnos">Volver a alumnos</BackLink>
         <p className="text-sm font-medium tracking-wide text-primary uppercase">
-          {detail.hasPlan ? "Editar plan" : "Cargar plan"}
+          {detail.hasPlan
+            ? "Editar plan de entrenamiento"
+            : "Cargar plan de entrenamiento"}
         </p>
         <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
           {titleName}.
@@ -524,7 +530,7 @@ export function ProfessionalPlanEditor({ clientId }: { clientId: string }) {
               onClick={clearPlan}
             >
               <Trash2 className="size-4" data-icon="inline-start" />
-              Limpiar plan
+              Limpiar plan de entrenamiento
             </Button>
           </div>
         </div>
@@ -704,8 +710,8 @@ export function ProfessionalPlanEditor({ clientId }: { clientId: string }) {
             {busy
               ? "Guardando…"
               : detail.hasPlan
-                ? "Guardar plan"
-                : "Cargar plan al alumno"}
+                ? "Guardar plan de entrenamiento"
+                : "Cargar plan de entrenamiento"}
           </Button>
           <Link
             href="/profesor/alumnos"

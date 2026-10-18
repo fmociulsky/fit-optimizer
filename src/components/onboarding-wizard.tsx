@@ -291,7 +291,9 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
   if (!hydrated) {
     return (
       <p className="mx-auto w-full max-w-2xl px-4 py-16 text-muted-foreground">
-        {rearmar ? "Cargando tu plan actual…" : "Cargando tus datos…"}
+        {rearmar
+          ? "Cargando tu plan de entrenamiento actual…"
+          : "Cargando tus datos…"}
       </p>
     );
   }
@@ -436,8 +438,8 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
         nextProfile.equipment === "coach"
           ? "Ficha lista. El gimnasio te asigna el profesor."
           : rearmar
-            ? `Plan rearmado (v${created.plan.version}). El historial se queda.`
-            : `Plan v${created.plan.version} listo para ${profile.name.split(" ")[0]}`
+            ? `Plan de entrenamiento rearmado (v${created.plan.version}). El historial se queda.`
+            : `Plan de entrenamiento v${created.plan.version} listo para ${profile.name.split(" ")[0]}`
       );
       router.push("/panel");
     } catch {
@@ -489,7 +491,9 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
           <section className="space-y-6">
             <header>
               <h1 className="font-heading text-4xl tracking-tight italic sm:text-5xl">
-                {rearmar ? "Rearmamos el plan." : "Empecemos por ti."}
+                {rearmar
+                  ? "Rearmamos el plan de entrenamiento."
+                  : "Empecemos por ti."}
               </h1>
               <p className="mt-3 text-muted-foreground">
                 {rearmar
@@ -971,8 +975,8 @@ export function OnboardingWizard({ rearmar = false }: { rearmar?: boolean }) {
             ? "Guardando…"
             : step === 5
               ? rearmar
-                ? "Rearmar mi plan"
-                : "Armar mi plan"
+                ? "Rearmar mi plan de entrenamiento"
+                : "Armar mi plan de entrenamiento"
               : "Continuar"}
           <ArrowRight data-icon="inline-end" />
         </Button>

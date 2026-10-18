@@ -27,11 +27,7 @@ export function ProfessionalLoginForm() {
     try {
       const account = await loginDemoProfessional(username, password);
       enterDemoProfessional(account);
-      toast.success(
-        account.userId.startsWith("demo-")
-          ? "Entraste como profesor de prueba."
-          : "Entraste como profesor."
-      );
+      toast.success("Entraste como profesor.");
       router.replace("/profesor");
     } catch (caught) {
       setError(
@@ -47,7 +43,7 @@ export function ProfessionalLoginForm() {
   return (
     <AuthShell
       title="Entrar como profesor."
-      hint="Los profesores del gimnasio entran con su usuario y contraseña 1234. Para el profesor de prueba: hema y 1234."
+      hint="Los profesores del gimnasio entran con su usuario y contraseña 1234."
     >
       <form
         className="mx-auto w-full max-w-sm space-y-4"

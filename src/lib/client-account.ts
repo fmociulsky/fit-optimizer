@@ -42,6 +42,41 @@ export function clientBillingPlanLabel(planName: string) {
   return planName.trim() || "—";
 }
 
+export function formatClientFee(amount: number | null | undefined) {
+  if (amount === null || amount === undefined) return null;
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
+export function formatBillingYmd(ymd: string) {
+  const raw = ymd.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(`${raw}T12:00:00`));
+}
+
+/** Texto corto del plan de pago (tipo, monto, vencimiento). */
+export function clientPlanSummary(input: {
+  planName?: string | null;
+  feeAmount?: number | null;
+  serviceEndsOn?: string | null;
+}) {
+  const parts: string[] = [];
+  const plan = clientBillingPlanLabel(input.planName ?? "");
+  if (plan !== "—") parts.push(plan);
+  const fee = formatClientFee(input.feeAmount);
+  if (fee) parts.push(fee);
+  const ends = formatBillingYmd(input.serviceEndsOn ?? "");
+  if (ends) parts.push(`vence ${ends}`);
+  return parts.length ? parts.join(" · ") : "Sin plan de pago";
+}
+
 /** Suma meses a una fecha YYYY-MM-DD, ajustando días que no existen (31 ene → 28/29 feb). */
 export function addMonthsYmd(ymd: string, months: number) {
   const date = new Date(`${ymd}T12:00:00`);

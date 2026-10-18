@@ -14,6 +14,7 @@ import {
   type StudioClientDraft,
 } from "@/components/studio-client-form";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { clientPlanSummary } from "@/lib/client-account";
 import { studioKindsLabel, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
 import {
@@ -213,6 +214,7 @@ export function GymClientsView() {
           <StudioClientForm
             studioId={studioId}
             dash={dash}
+            onCancel={() => setCreating(false)}
             onSaved={async (next) => {
               setDash(next);
               setCreating(false);
@@ -282,6 +284,14 @@ export function GymClientsView() {
                   <p className="text-sm text-muted-foreground">
                     Actividad: {studioKindsLabel(client.activities)}
                   </p>
+                  <p className="text-sm text-muted-foreground">
+                    Plan de pago:{" "}
+                    {clientPlanSummary({
+                      planName: client.planName,
+                      feeAmount: client.feeAmount,
+                      serviceEndsOn: client.serviceEndsOn,
+                    })}
+                  </p>
                   {dash ? (
                     <ClientTeacherAssign
                       studioId={client.studioId}
@@ -350,7 +360,7 @@ export function GymClientsView() {
                           "h-10 px-4"
                         )}
                       >
-                        Ver plan
+                        Ver plan de entrenamiento
                       </Link>
                     ) : (
                       <Button
@@ -359,7 +369,7 @@ export function GymClientsView() {
                         className="h-10 px-4"
                         disabled
                       >
-                        Ver plan
+                        Ver plan de entrenamiento
                       </Button>
                     )}
                     <Button

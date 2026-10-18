@@ -69,7 +69,8 @@ export function defaultCoachLedState(profile: Profile, goal: Goal = DEFAULT_COAC
   };
 }
 
-export const COACH_PLAN_REQUEST_TITLE = "Solicitar carga de plan al profesor";
+export const COACH_PLAN_REQUEST_TITLE =
+  "Solicitar plan de entrenamiento al profesor";
 
 const GOAL_TYPES: GoalType[] = [
   "fat_loss",

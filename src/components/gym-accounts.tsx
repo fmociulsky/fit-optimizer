@@ -482,7 +482,7 @@ export function GymAccountsView() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>Plan</Label>
+                <Label>Plan de pago</Label>
                 <div className="grid grid-cols-3 gap-2">
                   {CLIENT_BILLING_PLANS.map((plan) => (
                     <button

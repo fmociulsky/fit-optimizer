@@ -4,8 +4,11 @@ import { passwordClientError } from "@/lib/password-rules";
 
 export { PASSWORD_HINT, passwordClientError } from "@/lib/password-rules";
 
+/** Contraseña fija de prueba para alumnos y profesores dados de alta por el gimnasio. */
+export const TEST_ACCOUNT_PASSWORD = "1234";
+
 const scryptAsync = promisify(scrypt);
-const RESERVED = new Set(["hema", "1234", "1111"]);
+const RESERVED = new Set(["hema", "2222", "1234", "1111", "123456"]);
 
 export function parseUsername(raw: string) {
   const username = raw.trim().toLowerCase();

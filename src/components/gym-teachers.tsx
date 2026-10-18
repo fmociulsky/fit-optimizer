@@ -95,7 +95,9 @@ export function GymTeachersView() {
         password: "1234",
         sex,
       });
-      toast.success("Profesor creado.");
+      toast.success(
+        "Profesor creado. Entra con su usuario y contraseña 1234."
+      );
       setCreating(false);
       router.push(`/estudio/profesores/${teacher.userId}`);
     } catch (error) {

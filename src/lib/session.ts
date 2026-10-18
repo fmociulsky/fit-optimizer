@@ -7,27 +7,25 @@ import { getDb } from "@/db";
 import {
   accounts,
   coachRequests,
-  studioInvites,
   studioMemberships,
   studioTeacherShifts,
   studios,
   userStates,
 } from "@/db/schema";
-import { TYPICAL_GYM_MACHINE_IDS } from "@/lib/gym-machines";
-import { defaultDayHours } from "@/lib/hours";
 import { defaultDraftProfile } from "@/lib/metrics";
-import { TYPICAL_PILATES_IDS } from "@/lib/pilates";
 import { generatePlan } from "@/lib/plan";
 import { verifyPassword } from "@/lib/password";
-import { createInviteCode, createProfessionalCode } from "@/lib/roles";
+import { createProfessionalCode } from "@/lib/roles";
 import { resolveInternalUserIdFromClerk } from "@/lib/clerk-account";
-import type { Account, AppState, StudioKind, StudioMemberRole } from "@/lib/types";
+import type { Account, AppState, StudioMemberRole } from "@/lib/types";
 
 const DEMO_PROFESSIONAL_ID = "demo-professional";
 const DEMO_PROFESSIONAL_CODE = "ENF-123456";
 const DEMO_CLIENT_ID = "demo-client";
 const DEMO_STUDIO_ID = "demo-studio";
 const DEMO_STUDIO_CODE = "EST-123456";
+const DEMO_HEMA_STUDIO_ID = "demo-studio-hema";
+const DEMO_HEMA_STUDIO_CODE = "EST-HEMA01";
 const PRO_COOKIE = "enforma-demo-pro";
 const USER_COOKIE = "enforma-demo-user";
 const STUDIO_COOKIE = "enforma-demo-studio";
@@ -135,13 +133,7 @@ async function ensureDemoStudioClient() {
     .from(studioMemberships)
     .where(eq(studioMemberships.userId, DEMO_CLIENT_ID))
     .limit(1);
-  if (already) {
-    await db
-      .update(studioMemberships)
-      .set({ assignedTeacherUserId: DEMO_PROFESSIONAL_ID })
-      .where(eq(studioMemberships.userId, DEMO_CLIENT_ID));
-    return;
-  }
+  if (already) return;
   const studio = await findDemoStudio();
   if (!studio) return;
   await db.insert(studioMemberships).values({
@@ -150,7 +142,7 @@ async function ensureDemoStudioClient() {
     userId: DEMO_CLIENT_ID,
     role: "client",
     sessionsPerWeek: 2,
-    assignedTeacherUserId: DEMO_PROFESSIONAL_ID,
+    assignedTeacherUserId: null,
     displayName: "Alumno de prueba",
     createdAt: new Date(),
   });
@@ -160,58 +152,28 @@ export async function ensureDemoTeacherAssignment() {
   const studio = await findDemoStudio();
   if (!studio) return;
   const db = getDb();
-  const now = new Date();
-  const [teacherMember] = await db
-    .select({
-      id: studioMemberships.id,
-      role: studioMemberships.role,
-    })
-    .from(studioMemberships)
+  await db
+    .delete(studioTeacherShifts)
+    .where(eq(studioTeacherShifts.teacherUserId, DEMO_PROFESSIONAL_ID));
+  await db
+    .delete(studioMemberships)
     .where(
       and(
         eq(studioMemberships.studioId, studio.id),
-        eq(studioMemberships.userId, DEMO_PROFESSIONAL_ID)
+        eq(studioMemberships.userId, DEMO_PROFESSIONAL_ID),
+        eq(studioMemberships.role, "teacher")
       )
-    )
-    .limit(1);
-  if (!teacherMember) {
-    await db.insert(studioMemberships).values({
-      id: crypto.randomUUID(),
-      studioId: studio.id,
-      userId: DEMO_PROFESSIONAL_ID,
-      role: "teacher",
-      displayName: "Profesor de prueba",
-      phone: "11 5555-1234",
-      createdAt: now,
-    });
-  } else if (teacherMember.role === "teacher") {
-    await db
-      .update(studioMemberships)
-      .set({
-        displayName: "Profesor de prueba",
-        phone: "11 5555-1234",
-      })
-      .where(eq(studioMemberships.id, teacherMember.id));
-  }
-
-  const [shift] = await db
-    .select({ id: studioTeacherShifts.id })
-    .from(studioTeacherShifts)
-    .where(eq(studioTeacherShifts.teacherUserId, DEMO_PROFESSIONAL_ID))
-    .limit(1);
-  if (!shift) {
-    await db.insert(studioTeacherShifts).values(
-      [1, 2, 3, 4, 5].map((weekday) => ({
-        id: crypto.randomUUID(),
-        studioId: studio.id,
-        teacherUserId: DEMO_PROFESSIONAL_ID,
-        weekday,
-        startHour: "08:00",
-        endHour: "14:00",
-        capacityPerSlot: 8,
-      }))
     );
-  }
+  await db
+    .update(studioMemberships)
+    .set({ assignedTeacherUserId: null })
+    .where(eq(studioMemberships.assignedTeacherUserId, DEMO_PROFESSIONAL_ID));
+  await db
+    .update(accounts)
+    .set({ username: null, updatedAt: new Date() })
+    .where(
+      and(eq(accounts.userId, DEMO_PROFESSIONAL_ID), eq(accounts.username, "hema"))
+    );
 }
 
 async function findDemoStudio() {
@@ -261,7 +223,13 @@ export async function getDemoClientUserId() {
 
 export async function getDemoStudioUserId() {
   const jar = await cookies();
-  return jar.get(STUDIO_COOKIE)?.value === "1" ? DEMO_STUDIO_ID : null;
+  const value = jar.get(STUDIO_COOKIE)?.value;
+  if (!value) return null;
+  if (value === "1" || value === DEMO_STUDIO_ID) return DEMO_STUDIO_ID;
+  if (value === "hema" || value === DEMO_HEMA_STUDIO_ID) {
+    return DEMO_HEMA_STUDIO_ID;
+  }
+  return null;
 }
 
 export async function getSessionUserId() {
@@ -284,10 +252,10 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
     .where(eq(accounts.userId, DEMO_PROFESSIONAL_ID))
     .limit(1);
   if (existing?.role === "professional" && existing.code) {
-    if (existing.username !== "hema") {
+    if (existing.username === "hema") {
       await db
         .update(accounts)
-        .set({ username: "hema", updatedAt: new Date() })
+        .set({ username: null, updatedAt: new Date() })
         .where(eq(accounts.userId, DEMO_PROFESSIONAL_ID));
     }
     await ensureDemoClient(existing.userId);
@@ -295,8 +263,8 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
     return {
       userId: existing.userId,
       role: "professional",
-      name: existing.name || "Profesor de prueba",
-      username: "hema",
+      name: existing.name || "Profesor interno",
+      username: null,
       code: existing.code,
       linkedProfessionalId: null,
       linkedProfessionalCode: null,
@@ -320,8 +288,8 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
     .values({
       userId: DEMO_PROFESSIONAL_ID,
       role: "professional",
-      name: "Profesor de prueba",
-      username: "hema",
+      name: "Profesor interno",
+      username: null,
       code,
       linkedProfessionalId: null,
       createdAt: now,
@@ -331,8 +299,8 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
       target: accounts.userId,
       set: {
         role: "professional",
-        name: "Profesor de prueba",
-        username: "hema",
+        name: "Profesor interno",
+        username: null,
         code,
         linkedProfessionalId: null,
         updatedAt: now,
@@ -344,8 +312,8 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
   return {
     userId: DEMO_PROFESSIONAL_ID,
     role: "professional",
-    name: "Profesor de prueba",
-    username: "hema",
+    name: "Profesor interno",
+    username: null,
     code,
     linkedProfessionalId: null,
     linkedProfessionalCode: null,
@@ -353,7 +321,7 @@ async function ensureDemoProfessionalAccount(): Promise<Account> {
   };
 }
 
-async function ensureDemoStudioAccount(): Promise<Account> {
+async function ensureDemoStudio2222Account(): Promise<Account> {
   const db = getDb();
   const now = new Date();
   const [existingAccount] = await db
@@ -365,26 +333,30 @@ async function ensureDemoStudioAccount(): Promise<Account> {
     await db.insert(accounts).values({
       userId: DEMO_STUDIO_ID,
       role: "studio",
-      name: "Enforma",
+      name: "2222",
+      username: "2222",
       code: DEMO_STUDIO_CODE,
       linkedProfessionalId: null,
       createdAt: now,
       updatedAt: now,
     });
-  } else if (existingAccount.role !== "studio") {
+  } else {
     await db
       .update(accounts)
-      .set({ role: "studio", updatedAt: now })
+      .set({
+        role: "studio",
+        name: "2222",
+        username: "2222",
+        updatedAt: now,
+      })
       .where(eq(accounts.userId, DEMO_STUDIO_ID));
   }
 
-  const [owned] = await db
+  const owned = await db
     .select()
     .from(studios)
-    .where(eq(studios.ownerUserId, DEMO_STUDIO_ID))
-    .limit(1);
-  if (owned) {
-    const gymName = existingAccount?.name || owned.name || "Enforma";
+    .where(eq(studios.ownerUserId, DEMO_STUDIO_ID));
+  if (owned.length) {
     const [ownerMember] = await db
       .select({ id: studioMemberships.id })
       .from(studioMemberships)
@@ -393,152 +365,85 @@ async function ensureDemoStudioAccount(): Promise<Account> {
     if (!ownerMember) {
       await db.insert(studioMemberships).values({
         id: crypto.randomUUID(),
-        studioId: owned.id,
+        studioId: owned[0].id,
         userId: DEMO_STUDIO_ID,
         role: "owner",
-        displayName: gymName,
+        displayName: "2222",
         createdAt: now,
       });
     }
-    await ensureDemoTeacherAssignment();
-    return {
-      userId: DEMO_STUDIO_ID,
-      role: "studio",
-      name: gymName,
-      username: "hema",
-      code: owned.code || DEMO_STUDIO_CODE,
-      linkedProfessionalId: null,
-      linkedProfessionalCode: null,
-      studioRole: "owner",
-    };
   }
-
-  await ensureDemoProfessionalAccount();
-  let studio = await findDemoStudio();
-  const demoKinds: StudioKind[] = ["pilates", "gym"];
-  if (studio && studio.ownerUserId !== DEMO_STUDIO_ID) {
-    await db
-      .update(studios)
-      .set({
-        ownerUserId: DEMO_STUDIO_ID,
-        name: "Casa Norte",
-        kinds: demoKinds,
-        kind: "pilates",
-        updatedAt: now,
-      })
-      .where(eq(studios.id, studio.id));
-    await db
-      .delete(studioMemberships)
-      .where(eq(studioMemberships.userId, DEMO_PROFESSIONAL_ID));
-    studio = { ...studio, ownerUserId: DEMO_STUDIO_ID, name: "Casa Norte" };
-  }
-  if (!studio) {
-    const id = crypto.randomUUID();
-    const dayHours = defaultDayHours();
-    const row = {
-      id,
-      ownerUserId: DEMO_STUDIO_ID,
-      name: "Casa Norte",
-      kinds: demoKinds,
-      kind: "pilates" as const,
-      code: DEMO_STUDIO_CODE,
-      pilatesItems: [...TYPICAL_PILATES_IDS],
-      gymMachines: [...TYPICAL_GYM_MACHINE_IDS],
-      dayHours,
-      address: "Av. del Libertador 1234",
-      phone: "11 5555-2222",
-      openWeekdays: dayHours.map((item) => item.weekday),
-      openFrom: "08:00",
-      openTo: "21:00",
-      capacityPerSlot: 8,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await db.insert(studios).values(row);
-    studio = row;
-  } else if (!studio.dayHours?.length) {
-    await db
-      .update(studios)
-      .set({
-        kinds: demoKinds,
-        kind: "pilates",
-        dayHours: defaultDayHours(
-          studio.openWeekdays,
-          studio.openFrom,
-          studio.openTo
-        ),
-        updatedAt: now,
-      })
-      .where(eq(studios.id, studio.id));
-  }
-  if (!studio.address || !studio.phone) {
-    await db
-      .update(studios)
-      .set({
-        address: studio.address || "Av. del Libertador 1234",
-        phone: studio.phone || "11 5555-2222",
-        updatedAt: now,
-      })
-      .where(eq(studios.id, studio.id));
-  }
-
-  const [ownerMember] = await db
-    .select({ id: studioMemberships.id })
-    .from(studioMemberships)
-    .where(eq(studioMemberships.userId, DEMO_STUDIO_ID))
-    .limit(1);
-  if (!ownerMember) {
-    await db.insert(studioMemberships).values({
-      id: crypto.randomUUID(),
-      studioId: studio.id,
-      userId: DEMO_STUDIO_ID,
-      role: "owner",
-      displayName: "Casa Norte",
-      createdAt: now,
-    });
-  }
-
-  await ensureDemoTeacherAssignment();
-
-  const pending = await db
-    .select({ code: studioInvites.code })
-    .from(studioInvites)
-    .where(eq(studioInvites.studioId, studio.id))
-    .limit(1);
-  if (!pending.length) {
-    await db.insert(studioInvites).values([
-      {
-        code: createInviteCode("teacher"),
-        studioId: studio.id,
-        role: "teacher",
-        sessionsPerWeek: null,
-        displayName: "Ana",
-        createdAt: now,
-      },
-      {
-        code: createInviteCode("client"),
-        studioId: studio.id,
-        role: "client",
-        sessionsPerWeek: 2,
-        assignedTeacherUserId: DEMO_PROFESSIONAL_ID,
-        displayName: "Luis",
-        createdAt: now,
-      },
-    ]);
-  }
-
-  await ensureDemoStudioClient();
 
   return {
     userId: DEMO_STUDIO_ID,
     role: "studio",
-    name: "Casa Norte",
-    username: "hema",
-    code: studio.code || DEMO_STUDIO_CODE,
+    name: "2222",
+    username: "2222",
+    code: DEMO_STUDIO_CODE,
     linkedProfessionalId: null,
     linkedProfessionalCode: null,
     studioRole: "owner",
   };
+}
+
+async function ensureDemoHemaStudioAccount(): Promise<Account> {
+  const db = getDb();
+  const now = new Date();
+
+  // Liberar el username hema si todavía está en la cuenta 2222.
+  await db
+    .update(accounts)
+    .set({ username: "2222", name: "2222", updatedAt: now })
+    .where(
+      and(eq(accounts.userId, DEMO_STUDIO_ID), eq(accounts.username, "hema"))
+    );
+
+  const [existingAccount] = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.userId, DEMO_HEMA_STUDIO_ID))
+    .limit(1);
+  if (!existingAccount) {
+    await db.insert(accounts).values({
+      userId: DEMO_HEMA_STUDIO_ID,
+      role: "studio",
+      name: "hema",
+      username: "hema",
+      code: DEMO_HEMA_STUDIO_CODE,
+      linkedProfessionalId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } else {
+    await db
+      .update(accounts)
+      .set({
+        role: "studio",
+        name: "hema",
+        username: "hema",
+        updatedAt: now,
+      })
+      .where(eq(accounts.userId, DEMO_HEMA_STUDIO_ID));
+  }
+
+  return {
+    userId: DEMO_HEMA_STUDIO_ID,
+    role: "studio",
+    name: "hema",
+    username: "hema",
+    code: DEMO_HEMA_STUDIO_CODE,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: "owner",
+  };
+}
+
+async function ensureDemoStudioAccount(): Promise<Account> {
+  const studioUserId = await getDemoStudioUserId();
+  if (studioUserId === DEMO_HEMA_STUDIO_ID) {
+    return ensureDemoHemaStudioAccount();
+  }
+  return ensureDemoStudio2222Account();
 }
 
 async function ensureDemoClientAccount(): Promise<Account> {
@@ -617,43 +522,34 @@ const DEMO_COOKIE = {
 };
 
 export async function loginDemoProfessional(username: string, password: string) {
-  let account: Account;
-  if (username.trim().toLowerCase() === "hema" && password === "1234") {
-    account = await ensureDemoProfessionalAccount();
-  } else {
-    const normalized = username.trim().toLowerCase();
-    const [row] = await getDb()
-      .select()
-      .from(accounts)
-      .where(eq(accounts.username, normalized))
-      .limit(1);
-    if (
-      !row ||
-      row.role !== "professional" ||
-      !row.passwordHash ||
-      !(await verifyPassword(password, row.passwordHash))
-    ) {
-      throw new Error("Usuario o contraseña incorrectos.");
-    }
-    account = {
-      userId: row.userId,
-      role: "professional",
-      name: row.name || "Profesor",
-      username: row.username,
-      code: row.code,
-      linkedProfessionalId: null,
-      linkedProfessionalCode: null,
-      studioRole: await demoStudioRole(row.userId),
-    };
+  const normalized = username.trim().toLowerCase();
+  const [row] = await getDb()
+    .select()
+    .from(accounts)
+    .where(eq(accounts.username, normalized))
+    .limit(1);
+  if (
+    !row ||
+    row.role !== "professional" ||
+    !row.passwordHash ||
+    !(await verifyPassword(password, row.passwordHash))
+  ) {
+    throw new Error("Usuario o contraseña incorrectos.");
   }
+  const account: Account = {
+    userId: row.userId,
+    role: "professional",
+    name: row.name || "Profesor",
+    username: row.username,
+    code: row.code,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: await demoStudioRole(row.userId),
+  };
   const jar = await cookies();
   jar.delete(USER_COOKIE);
   jar.delete(STUDIO_COOKIE);
-  jar.set(
-    PRO_COOKIE,
-    account.userId === DEMO_PROFESSIONAL_ID ? "1" : account.userId,
-    DEMO_COOKIE
-  );
+  jar.set(PRO_COOKIE, account.userId, DEMO_COOKIE);
   return account;
 }
 
@@ -700,14 +596,20 @@ export async function loginDemoClient(username: string, password: string) {
 }
 
 export async function loginDemoStudio(username: string, password: string) {
-  if (username.trim().toLowerCase() !== "hema" || password !== "1234") {
-    throw new Error("Usuario o contraseña incorrectos.");
-  }
+  const normalized = username.trim().toLowerCase();
   const jar = await cookies();
   jar.delete(PRO_COOKIE);
   jar.delete(USER_COOKIE);
-  jar.set(STUDIO_COOKIE, "1", DEMO_COOKIE);
-  return ensureDemoStudioAccount();
+
+  if (normalized === "hema" && password === "123456") {
+    jar.set(STUDIO_COOKIE, DEMO_HEMA_STUDIO_ID, DEMO_COOKIE);
+    return ensureDemoHemaStudioAccount();
+  }
+  if (normalized === "2222" && password === "1234") {
+    jar.set(STUDIO_COOKIE, "1", DEMO_COOKIE);
+    return ensureDemoStudio2222Account();
+  }
+  throw new Error("Usuario o contraseña incorrectos.");
 }
 
 export async function logoutDemoProfessional() {

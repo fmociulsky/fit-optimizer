@@ -372,7 +372,9 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                 icon={Sparkles}
                 onNavigate={() => setOpen(false)}
               >
-                {hasPlan ? "Nuevo plan" : "Plan personal"}
+                {hasPlan
+                  ? "Nuevo plan de entrenamiento"
+                  : "Plan de entrenamiento"}
               </MenuLink>
                 </>
               )}

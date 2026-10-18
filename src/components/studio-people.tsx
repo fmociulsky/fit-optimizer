@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { clientPlanSummary } from "@/lib/client-account";
 import { SEX_LABEL, studioKindsLabel, WEEKDAYS } from "@/lib/labels";
 import { matchesSearch } from "@/lib/search";
 import { cn } from "@/lib/utils";
@@ -209,7 +210,9 @@ function StudioTeachersCard({
       setUsername("");
       setSex(null);
       setCreating(false);
-      toast.success("Profesor creado y asignado a esta sucursal.");
+      toast.success(
+        "Profesor creado. Entra con su usuario y contraseña 1234."
+      );
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -611,6 +614,7 @@ function StudioClientsCard({
         <StudioClientForm
           studioId={dash.studio.id}
           dash={dash}
+          onCancel={() => setCreating(false)}
           onSaved={(next) => {
             setCreating(false);
             onChange(next);
@@ -697,6 +701,16 @@ function StudioClientsCard({
                   <p className="text-sm text-muted-foreground">
                     Actividad: {studioKindsLabel(person.activities)}
                   </p>
+                  {!person.pending ? (
+                    <p className="text-sm text-muted-foreground">
+                      Plan de pago:{" "}
+                      {clientPlanSummary({
+                        planName: person.planName,
+                        feeAmount: person.feeAmount,
+                        serviceEndsOn: person.serviceEndsOn,
+                      })}
+                    </p>
+                  ) : null}
                   {person.pending && person.code ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-heading text-xl italic tracking-wide">
@@ -771,7 +785,7 @@ function StudioClientsCard({
                             "h-10 px-4"
                           )}
                         >
-                          Ver plan
+                          Ver plan de entrenamiento
                         </Link>
                       ) : (
                         <Button
@@ -780,7 +794,7 @@ function StudioClientsCard({
                           className="h-10 px-4"
                           disabled
                         >
-                          Ver plan
+                          Ver plan de entrenamiento
                         </Button>
                       )
                     ) : null}

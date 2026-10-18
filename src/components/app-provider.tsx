@@ -249,9 +249,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             try {
               await persistNow();
             } catch {
-              toast.error("No se pudo subir tu plan a la base de datos.", {
-                id: "db-save",
-              });
+              toast.error(
+                "No se pudo subir tu plan de entrenamiento a la base de datos.",
+                { id: "db-save" }
+              );
             }
           }
         }
@@ -382,7 +383,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       changes.push(`Zonas: ${zonesLabel(goal.focusAreas)}.`);
     }
     if (!changes.length) {
-      changes.push("Plan rearmado con los datos actuales.");
+      changes.push("Plan de entrenamiento rearmado con los datos actuales.");
     }
 
     const adjustment: Adjustment = {
