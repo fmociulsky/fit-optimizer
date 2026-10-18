@@ -286,7 +286,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   icon={CalendarCheck}
                   onNavigate={() => setOpen(false)}
                 >
-                  Mi plan
+                  Mi plan de entrenamiento
                 </MenuLink>
                 <MenuLink
                   href="/turnos"
@@ -323,7 +323,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   icon={CalendarCheck}
                   onNavigate={() => setOpen(false)}
                 >
-                  Mi plan
+                  Mi plan de entrenamiento
                 </MenuLink>
               )}
               {hasPlan && (

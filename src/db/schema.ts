@@ -238,3 +238,39 @@ export const studioPayments = pgTable(
     index("studio_payments_client_idx").on(table.clientUserId),
   ]
 );
+
+export type ShiftRequestStatus = "pending" | "approved" | "rejected";
+
+export type ProposedTeacherShift = {
+  weekday: number;
+  startHour: string;
+  endHour: string;
+  capacityPerSlot?: number;
+};
+
+/** Pedidos de cambio de horario del profesor, pendientes de aprobación del estudio. */
+export const studioShiftRequests = pgTable(
+  "studio_shift_requests",
+  {
+    id: text("id").primaryKey(),
+    studioId: text("studio_id").notNull(),
+    teacherUserId: text("teacher_user_id").notNull(),
+    proposedShifts: jsonb("proposed_shifts")
+      .$type<ProposedTeacherShift[]>()
+      .notNull()
+      .default([]),
+    status: text("status")
+      .$type<ShiftRequestStatus>()
+      .notNull()
+      .default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("studio_shift_requests_studio_idx").on(table.studioId),
+    index("studio_shift_requests_teacher_idx").on(table.teacherUserId),
+    index("studio_shift_requests_status_idx").on(table.status),
+  ]
+);

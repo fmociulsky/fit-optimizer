@@ -379,9 +379,6 @@ function StudioTeachersCard({
                       </span>
                     ) : null}
                   </p>
-                  <p className="hidden min-w-0 max-w-[10rem] truncate text-sm text-muted-foreground sm:block">
-                    {person.phone || "—"}
-                  </p>
                   <p className="hidden min-w-0 max-w-[8rem] truncate text-sm text-muted-foreground lg:block">
                     {studentCount === 0
                       ? "Sin alumnos"
@@ -406,11 +403,6 @@ function StudioTeachersCard({
                   <ChevronDown className="size-4 shrink-0 text-muted-foreground transition group-open:rotate-180" />
                 </summary>
                 <div className="border-t border-foreground/8 px-4 pt-3 pb-4">
-                  {person.phone ? (
-                    <p className="mb-2 text-sm text-muted-foreground sm:hidden">
-                      {person.phone}
-                    </p>
-                  ) : null}
                   <div>
                     <p className="font-medium">Días y horarios</p>
                     <p className="mt-0.5 text-sm text-muted-foreground">
@@ -444,9 +436,6 @@ function StudioTeachersCard({
           <li key={person.code} className="flex items-center gap-3 px-4 py-3">
             <p className="min-w-0 flex-1 truncate font-medium">
               {person.displayName}
-            </p>
-            <p className="hidden min-w-0 max-w-[10rem] truncate text-sm text-muted-foreground sm:block">
-              {person.phone || "Pendiente"}
             </p>
             <PersonRow person={person} />
           </li>

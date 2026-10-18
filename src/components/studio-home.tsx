@@ -6,6 +6,7 @@ import { Building2, GraduationCap, MapPin, Pencil, Phone, Plus, Users } from "lu
 import { SiteHeader } from "@/components/site-header";
 import { StudioBranchForm } from "@/components/studio-branch-form";
 import { StudioDayAgenda } from "@/components/studio-day-agenda";
+import { StudioShiftRequestsPanel } from "@/components/studio-shift-requests";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -101,6 +102,8 @@ export function StudioHome() {
           </Link>
         </div>
 
+        <StudioShiftRequestsPanel />
+
         <ul className="mt-8 grid gap-4 sm:grid-cols-2">
           {rows.map((row) => (
             <li
@@ -137,7 +140,10 @@ export function StudioHome() {
                 </p>
               </div>
               <div className="mt-5 flex flex-wrap gap-2">
-                <StudioDayAgenda studioId={row.studio.id} />
+                <StudioDayAgenda
+                  studioId={row.studio.id}
+                  openWeekdays={row.studio.dayHours.map((day) => day.weekday)}
+                />
                 <Link
                   href={`/estudio/${row.studio.id}/profesores`}
                   className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}

@@ -10,9 +10,11 @@ import {
   studioMemberships,
   studioPayments,
   studioReservations,
+  studioShiftRequests,
   studioTeacherShifts,
   studios,
   userStates,
+  type ProposedTeacherShift,
 } from "@/db/schema";
 import {
   dayKindCapacity,
@@ -37,6 +39,7 @@ import {
   TEST_ACCOUNT_PASSWORD,
   usernameFromEmail,
 } from "@/lib/password";
+import { WEEKDAYS } from "@/lib/labels";
 import { getSessionUserId } from "@/lib/session";
 import { planHasExercises } from "@/lib/coach";
 import {
@@ -1875,9 +1878,11 @@ export async function markGymClientPaid(input: {
  * Rellena planes y fechas de ejemplo.
  * La primera vez (sin notas "Simulado") marca varios vencidos este mes.
  * Después solo completa alumnos nuevos sin plan.
+ * El estudio hema (demo) no recibe datos simulados.
  */
 export async function seedGymClientBillingSamples(force = false) {
-  const { branches } = await requireOwnedGym();
+  const { userId, branches } = await requireOwnedGym();
+  if (userId === "demo-studio-hema") return { updated: 0 };
   if (!branches.length) return { updated: 0 };
   const studioIds = branches.map((item) => item.id);
   const db = getDb();
@@ -3017,11 +3022,140 @@ export async function saveTeacherShifts(
     )
     .limit(1);
   if (!teacher) throw new Error("Ese profesor no está en el gimnasio.");
-  await persistTeacherShifts(studio, teacherUserId, shifts);
+  const proposed = normalizeProposedShifts(studio, shifts);
+  await assertNoOrphanStudentSlots(studio.id, teacherUserId, proposed);
+  await persistTeacherShifts(studio, teacherUserId, proposed);
+  await cancelPendingShiftRequests(studio.id, teacherUserId);
   return loadStudioDashboard(studio.id);
 }
 
-export async function saveOwnTeacherShifts(
+function normalizeProposedShifts(
+  studio: Studio,
+  shifts: TeacherShiftInput[]
+): ProposedTeacherShift[] {
+  return shifts.map((shift) => {
+    const day = hoursForWeekday(studio.dayHours, shift.weekday);
+    if (!day) {
+      throw new Error("Ese día el gimnasio está cerrado.");
+    }
+    const studioSlots = hourSlots(day.openFrom, day.openTo);
+    const shiftSlots = hourSlots(shift.startHour, shift.endHour);
+    if (!shiftSlots.length) {
+      throw new Error("Revisa la franja del profesor.");
+    }
+    if (shiftSlots.some((slot) => !studioSlots.includes(slot))) {
+      throw new Error(
+        "El horario del profesor tiene que estar dentro de la apertura de ese día."
+      );
+    }
+    return {
+      weekday: shift.weekday,
+      startHour: shift.startHour,
+      endHour: shift.endHour,
+      capacityPerSlot: 8,
+    };
+  });
+}
+
+function slotKeysFromShifts(
+  shifts: { weekday: number; startHour: string; endHour: string }[]
+) {
+  const keys = new Set<string>();
+  for (const shift of shifts) {
+    for (const slotStart of hourSlots(shift.startHour, shift.endHour)) {
+      keys.add(`${shift.weekday}|${slotStart}`);
+    }
+  }
+  return keys;
+}
+
+function formatSlotKey(key: string) {
+  const [weekdayRaw, slotStart] = key.split("|");
+  const weekday = Number(weekdayRaw);
+  const day =
+    WEEKDAYS.find((item) => item.id === weekday)?.full ?? `Día ${weekday}`;
+  return `${day} ${slotStart}`;
+}
+
+/**
+ * Bloquea un cambio que deja franjas con alumnos anotados y sin ningún
+ * otro profesor cubriéndolas.
+ */
+async function assertNoOrphanStudentSlots(
+  studioId: string,
+  teacherUserId: string,
+  proposedShifts: ProposedTeacherShift[]
+) {
+  const db = getDb();
+  const [currentShifts, otherShifts, reservations] = await Promise.all([
+    db
+      .select()
+      .from(studioTeacherShifts)
+      .where(
+        and(
+          eq(studioTeacherShifts.studioId, studioId),
+          eq(studioTeacherShifts.teacherUserId, teacherUserId)
+        )
+      ),
+    db
+      .select()
+      .from(studioTeacherShifts)
+      .where(
+        and(
+          eq(studioTeacherShifts.studioId, studioId),
+          ne(studioTeacherShifts.teacherUserId, teacherUserId)
+        )
+      ),
+    db
+      .select({
+        weekday: studioReservations.weekday,
+        slotStart: studioReservations.slotStart,
+      })
+      .from(studioReservations)
+      .where(eq(studioReservations.studioId, studioId)),
+  ]);
+
+  const currentKeys = slotKeysFromShifts(currentShifts);
+  const proposedKeys = slotKeysFromShifts(proposedShifts);
+  const otherKeys = slotKeysFromShifts(otherShifts);
+  const studentKeys = new Set(
+    reservations.map((item) => `${item.weekday}|${item.slotStart}`)
+  );
+
+  const orphaned: string[] = [];
+  for (const key of currentKeys) {
+    if (proposedKeys.has(key)) continue;
+    if (!studentKeys.has(key)) continue;
+    if (otherKeys.has(key)) continue;
+    orphaned.push(formatSlotKey(key));
+  }
+
+  if (!orphaned.length) return;
+  throw new Error(
+    orphaned.length === 1
+      ? `No se puede dejar ${orphaned[0]}: hay alumnos anotados y no queda otro profesor.`
+      : `No se pueden dejar estos horarios: hay alumnos anotados y no queda otro profesor (${orphaned.join(", ")}).`
+  );
+}
+
+async function cancelPendingShiftRequests(
+  studioId: string,
+  teacherUserId: string
+) {
+  await getDb()
+    .update(studioShiftRequests)
+    .set({ status: "rejected", resolvedAt: new Date() })
+    .where(
+      and(
+        eq(studioShiftRequests.studioId, studioId),
+        eq(studioShiftRequests.teacherUserId, teacherUserId),
+        eq(studioShiftRequests.status, "pending")
+      )
+    );
+}
+
+/** El profesor pide un cambio; el estudio tiene que aprobarlo. */
+export async function requestOwnTeacherShifts(
   studioId: string,
   shifts: TeacherShiftInput[]
 ) {
@@ -3036,8 +3170,148 @@ export async function saveOwnTeacherShifts(
     .where(eq(studios.id, studioId))
     .limit(1);
   if (!studioRow) throw new Error("El gimnasio ya no está.");
-  await persistTeacherShifts(toStudio(studioRow), userId, shifts);
+  const studio = toStudio(studioRow);
+  const proposedShifts = normalizeProposedShifts(studio, shifts);
+  await assertNoOrphanStudentSlots(studio.id, userId, proposedShifts);
+  const db = getDb();
+  await cancelPendingShiftRequests(studio.id, userId);
+  await db.insert(studioShiftRequests).values({
+    id: uid(),
+    studioId: studio.id,
+    teacherUserId: userId,
+    proposedShifts,
+    status: "pending",
+    createdAt: new Date(),
+    resolvedAt: null,
+  });
   return loadTeacherStudioHours();
+}
+
+/** @deprecated Prefer requestOwnTeacherShifts — el profesor ya no guarda directo. */
+export async function saveOwnTeacherShifts(
+  studioId: string,
+  shifts: TeacherShiftInput[]
+) {
+  return requestOwnTeacherShifts(studioId, shifts);
+}
+
+/** El profesor cancela su pedido pendiente y vuelve al horario vigente. */
+export async function cancelOwnTeacherShiftRequest(studioId: string) {
+  const userId = await requireUserId();
+  const member = await teacherMembershipFor(userId, studioId);
+  if (!member) {
+    throw new Error("No eres profesor de esa sucursal.");
+  }
+  await cancelPendingShiftRequests(studioId, userId);
+  return loadTeacherStudioHours();
+}
+
+export type StudioShiftRequestView = {
+  id: string;
+  studioId: string;
+  studioName: string;
+  teacherUserId: string;
+  teacherName: string;
+  proposedShifts: ProposedTeacherShift[];
+  currentShifts: ProposedTeacherShift[];
+  createdAt: string;
+};
+
+export async function listPendingShiftRequests(): Promise<
+  StudioShiftRequestView[]
+> {
+  const { branches } = await requireOwnedGym();
+  if (!branches.length) return [];
+  const studioIds = branches.map((item) => item.id);
+  const studioNameById = new Map(branches.map((item) => [item.id, item.name]));
+  const db = getDb();
+  const pending = await db
+    .select()
+    .from(studioShiftRequests)
+    .where(
+      and(
+        inArray(studioShiftRequests.studioId, studioIds),
+        eq(studioShiftRequests.status, "pending")
+      )
+    )
+    .orderBy(desc(studioShiftRequests.createdAt));
+  if (!pending.length) return [];
+  const teacherIds = [...new Set(pending.map((item) => item.teacherUserId))];
+  const members = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        inArray(studioMemberships.studioId, studioIds),
+        inArray(studioMemberships.userId, teacherIds),
+        eq(studioMemberships.role, "teacher")
+      )
+    );
+  const nameByKey = new Map(
+    members.map(
+      (item) => [`${item.studioId}:${item.userId}`, item.displayName] as const
+    )
+  );
+  const currentShifts = await db
+    .select()
+    .from(studioTeacherShifts)
+    .where(
+      and(
+        inArray(studioTeacherShifts.studioId, studioIds),
+        inArray(studioTeacherShifts.teacherUserId, teacherIds)
+      )
+    );
+  return pending.map((row) => ({
+    id: row.id,
+    studioId: row.studioId,
+    studioName: studioNameById.get(row.studioId) ?? "Sucursal",
+    teacherUserId: row.teacherUserId,
+    teacherName:
+      nameByKey.get(`${row.studioId}:${row.teacherUserId}`) || "Profesor",
+    proposedShifts: row.proposedShifts ?? [],
+    currentShifts: currentShifts
+      .filter(
+        (item) =>
+          item.studioId === row.studioId &&
+          item.teacherUserId === row.teacherUserId
+      )
+      .map((item) => ({
+        weekday: item.weekday,
+        startHour: item.startHour,
+        endHour: item.endHour,
+        capacityPerSlot: normalizeCupo(item.capacityPerSlot) ?? 8,
+      })),
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
+
+export async function resolveShiftRequest(
+  requestId: string,
+  decision: "approved" | "rejected"
+) {
+  const { branches } = await requireOwnedGym();
+  const studioIds = new Set(branches.map((item) => item.id));
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(studioShiftRequests)
+    .where(eq(studioShiftRequests.id, requestId.trim()))
+    .limit(1);
+  if (!row || row.status !== "pending" || !studioIds.has(row.studioId)) {
+    throw new Error("Esa solicitud ya no está pendiente.");
+  }
+  if (decision === "approved") {
+    const studio = branches.find((item) => item.id === row.studioId);
+    if (!studio) throw new Error("La sucursal ya no está.");
+    const proposed = row.proposedShifts ?? [];
+    await assertNoOrphanStudentSlots(studio.id, row.teacherUserId, proposed);
+    await persistTeacherShifts(studio, row.teacherUserId, proposed);
+  }
+  await db
+    .update(studioShiftRequests)
+    .set({ status: decision, resolvedAt: new Date() })
+    .where(eq(studioShiftRequests.id, row.id));
+  return listPendingShiftRequests();
 }
 
 export async function redeemStudioInvite(rawCode: string) {
@@ -3415,6 +3689,11 @@ export type TeacherStudioHours = {
   studio: Studio;
   shifts: StudioShift[];
   reservations: (typeof studioReservations.$inferSelect)[];
+  pendingRequest: {
+    id: string;
+    proposedShifts: ProposedTeacherShift[];
+    createdAt: string;
+  } | null;
 };
 
 export async function loadTeacherStudioHours(): Promise<TeacherStudioHours[]> {
@@ -3446,8 +3725,19 @@ export async function loadTeacherStudioHours(): Promise<TeacherStudioHours[]> {
         eq(studioReservations.teacherUserId, userId)
       )
     );
+  const pendingRows = await getDb()
+    .select()
+    .from(studioShiftRequests)
+    .where(
+      and(
+        inArray(studioShiftRequests.studioId, studioIds),
+        eq(studioShiftRequests.teacherUserId, userId),
+        eq(studioShiftRequests.status, "pending")
+      )
+    );
   return studioRows.map((row) => {
     const studio = toStudio(row);
+    const pending = pendingRows.find((item) => item.studioId === studio.id);
     return {
       studio,
       shifts: allShifts
@@ -3463,6 +3753,13 @@ export async function loadTeacherStudioHours(): Promise<TeacherStudioHours[]> {
       reservations: allReservations.filter(
         (item) => item.studioId === studio.id
       ),
+      pendingRequest: pending
+        ? {
+            id: pending.id,
+            proposedShifts: pending.proposedShifts ?? [],
+            createdAt: pending.createdAt.toISOString(),
+          }
+        : null,
     };
   });
 }

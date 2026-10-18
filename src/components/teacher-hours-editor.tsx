@@ -36,6 +36,20 @@ function draftsFromShifts(shifts: TeacherHoursDraft[]) {
   ) as Record<number, DraftShift>;
 }
 
+function draftKey(draft: Record<number, DraftShift>) {
+  return Object.entries(draft)
+    .map(([weekday, hours]) => `${weekday}:${hours.startHour}:${hours.endHour}`)
+    .sort()
+    .join("|");
+}
+
+function shiftsKeyOf(shifts: TeacherHoursDraft[]) {
+  return shifts
+    .map((item) => `${item.weekday}:${item.startHour}:${item.endHour}`)
+    .sort()
+    .join("|");
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "No se pudo guardar.";
 }
@@ -45,24 +59,24 @@ export function TeacherHoursEditor({
   shifts,
   onSave,
   saveLabel,
+  successMessage = "Horario guardado.",
+  revertLabel = "Revertir cambios",
   className,
 }: {
   dayHours: StudioDayHours[];
   shifts: TeacherHoursDraft[];
   onSave: (next: TeacherHoursDraft[]) => Promise<void>;
   saveLabel: string;
+  successMessage?: string;
+  revertLabel?: string;
   className?: string;
 }) {
   const [draft, setDraft] = useState(() => draftsFromShifts(shifts));
   const [busy, setBusy] = useState(false);
   const shiftsRef = useRef(shifts);
   shiftsRef.current = shifts;
-  const shiftsKey = shifts
-    .map(
-      (item) =>
-        `${item.weekday}:${item.startHour}:${item.endHour}`
-    )
-    .join("|");
+  const shiftsKey = shiftsKeyOf(shifts);
+  const dirty = draftKey(draft) !== shiftsKey;
 
   useEffect(() => {
     setDraft(draftsFromShifts(shiftsRef.current));
@@ -86,6 +100,10 @@ export function TeacherHoursEditor({
     });
   }
 
+  function revert() {
+    setDraft(draftsFromShifts(shiftsRef.current));
+  }
+
   async function save() {
     setBusy(true);
     try {
@@ -96,7 +114,7 @@ export function TeacherHoursEditor({
           endHour: hours.endHour,
         }))
       );
-      toast.success("Horario guardado.");
+      toast.success(successMessage);
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -196,15 +214,26 @@ export function TeacherHoursEditor({
           </div>
         );
       })}
-      <Button
-        type="button"
-        variant="outline"
-        className="h-11 px-4"
-        disabled={busy}
-        onClick={() => void save()}
-      >
-        {busy ? "Guardando…" : saveLabel}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11 px-4"
+          disabled={busy || !dirty}
+          onClick={() => void save()}
+        >
+          {busy ? "Guardando…" : saveLabel}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-11 px-4"
+          disabled={busy || !dirty}
+          onClick={revert}
+        >
+          {revertLabel}
+        </Button>
+      </div>
     </div>
   );
 }
