@@ -293,7 +293,13 @@ export function GymClientsView() {
                         assignedTeacherName: client.teacherName,
                       }}
                       teachers={dash.people
-                        .filter((item) => item.role === "teacher" && item.userId)
+                        .filter(
+                          (item) =>
+                            item.role === "teacher" &&
+                            item.userId &&
+                            (item.active ||
+                              item.userId === client.assignedTeacherUserId)
+                        )
                         .map((item) => ({
                           userId: item.userId!,
                           displayName: item.displayName,

@@ -22,6 +22,7 @@ import {
   listGymTeachers,
   loadGymTeacher,
   saveGymTeacherShifts,
+  setGymTeacherActive,
   unassignGymTeacher,
   updateGymTeacher,
   type GymTeacherDetail,
@@ -234,10 +235,18 @@ export function GymTeachersView() {
             <li key={teacher.userId}>
               <Link
                 href={`/estudio/profesores/${teacher.userId}`}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-foreground/[0.03]"
+                className={cn(
+                  "flex items-center gap-3 px-4 py-3 transition-colors hover:bg-foreground/[0.03]",
+                  !teacher.active && "opacity-60"
+                )}
               >
                 <p className="min-w-0 flex-1 truncate font-medium">
                   {teacher.displayName}
+                  {!teacher.active ? (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      Desactivado
+                    </span>
+                  ) : null}
                 </p>
                 <p className="hidden min-w-0 max-w-[10rem] truncate text-sm text-muted-foreground sm:block">
                   {teacher.phone || teacher.username || "—"}
@@ -312,6 +321,33 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
     }
   }
 
+  async function toggleActive() {
+    if (!teacher || busy) return;
+    const nextActive = !teacher.active;
+    if (!nextActive) {
+      const ok = window.confirm(
+        `¿Desactivar a ${teacher.displayName}? No aparecerá en la agenda de alumnos ni se podrá asignar a nuevos alumnos.`
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      apply(
+        await setGymTeacherActive({
+          teacherUserId: teacher.userId,
+          active: nextActive,
+        })
+      );
+      toast.success(
+        nextActive ? "Profesor activado." : "Profesor desactivado."
+      );
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove() {
     if (!teacher || busy) return;
     const ok = window.confirm(
@@ -357,6 +393,11 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
           <h1 className="mt-2 font-heading text-4xl tracking-tight italic sm:text-5xl">
             {teacher.displayName}
           </h1>
+          {!teacher.active ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Desactivado · no aparece en la agenda de alumnos
+            </p>
+          ) : null}
           {teacher.phone ? (
             <p className="mt-2 flex items-center gap-2 text-muted-foreground">
               <Phone className="size-4 shrink-0" />
@@ -524,6 +565,19 @@ export function GymTeacherDetailView({ teacherId }: { teacherId: string }) {
 
         <section className="border-t border-foreground/8 pt-6">
           <p className="text-sm text-muted-foreground">
+            Si lo desactivás, deja de aparecer en la agenda de alumnos y no se
+            puede asignar a nuevos alumnos. Sus datos y horarios se mantienen.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-3 h-11 px-5"
+            disabled={busy}
+            onClick={() => void toggleActive()}
+          >
+            {teacher.active ? "Desactivar profesor" : "Activar profesor"}
+          </Button>
+          <p className="mt-6 text-sm text-muted-foreground">
             Al eliminarlo se quitan todas las asignaciones, horarios y reservas
             en este gimnasio.
           </p>

@@ -1,4 +1,5 @@
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -161,6 +162,7 @@ export const gymTeachers = pgTable(
     displayName: text("display_name").notNull(),
     phone: text("phone").notNull().default(""),
     sex: text("sex").$type<Sex>().notNull().default("other"),
+    active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

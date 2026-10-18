@@ -841,6 +841,7 @@ export type StudioPerson = {
   sessionsPerWeek: number | null;
   assignedTeacherUserId: string | null;
   assignedTeacherName: string | null;
+  active: boolean;
   hasPlan: boolean;
   code?: string;
   pending: boolean;
@@ -923,9 +924,30 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
   const nameById = new Map(
     members.map((item) => [item.userId, item.displayName] as const)
   );
-  const teachers = members.filter((item) => item.role === "teacher");
+  const teacherMembers = members.filter((item) => item.role === "teacher");
+  const teacherIds = teacherMembers.map((item) => item.userId);
+  const rosterRows = teacherIds.length
+    ? await db
+        .select({
+          userId: gymTeachers.userId,
+          active: gymTeachers.active,
+        })
+        .from(gymTeachers)
+        .where(
+          and(
+            eq(gymTeachers.ownerUserId, studio.ownerUserId),
+            inArray(gymTeachers.userId, teacherIds)
+          )
+        )
+    : [];
+  const activeByTeacher = new Map(
+    rosterRows.map((item) => [item.userId, item.active] as const)
+  );
+  const teachers = teacherMembers.filter(
+    (item) => activeByTeacher.get(item.userId) !== false
+  );
   const teacherNameById = new Map(
-    teachers.map((item) => [item.userId, item.displayName] as const)
+    teacherMembers.map((item) => [item.userId, item.displayName] as const)
   );
 
   const memberIds = members.map((item) => item.userId);
@@ -975,6 +997,10 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
         assignedTeacherName: item.assignedTeacherUserId
           ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
           : null,
+        active:
+          item.role === "teacher"
+            ? activeByTeacher.get(item.userId) !== false
+            : true,
         hasPlan:
           item.role === "client"
             ? (planByUser.get(item.userId) ?? false)
@@ -995,6 +1021,7 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
       assignedTeacherName: item.assignedTeacherUserId
         ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
         : null,
+      active: true,
       hasPlan: false,
       code: item.code,
       pending: true,
@@ -1240,6 +1267,7 @@ export async function createStudioClient(input: {
   picks: { weekday: number; slotStart: string }[];
   billingPlan: ClientBillingPlan;
   serviceStartsOn: string;
+  feeAmount: number;
 }) {
   const { studio } = await requireStudioOwner(input.studioId);
   const displayName = input.displayName.trim();
@@ -1253,6 +1281,10 @@ export async function createStudioClient(input: {
     throw new Error("Las veces por semana van de 1 a 6.");
   }
   const billingPlan = parseBillingPlan(input.billingPlan);
+  const feeAmount = parseFeeAmount(input.feeAmount);
+  if (feeAmount === null || feeAmount <= 0) {
+    throw new Error("Pon el valor del plan.");
+  }
   const serviceStartsOn = parseOptionalYmd(
     input.serviceStartsOn,
     "día de inicio"
@@ -1291,9 +1323,18 @@ export async function createStudioClient(input: {
     activities,
     paymentStatus: "current",
     planName: billingPlan,
+    feeAmount,
     lastPaidOn: serviceStartsOn,
     serviceEndsOn,
     createdAt: new Date(),
+  });
+  await recordStudioPayment({
+    studioId: studio.id,
+    clientUserId: userId,
+    amount: feeAmount,
+    paidOn: serviceStartsOn,
+    planName: billingPlan,
+    note: "Alta",
   });
   if (reservationRows.length) {
     await getDb().insert(studioReservations).values(
@@ -2196,6 +2237,7 @@ export type GymTeacherSummary = {
   phone: string;
   username: string;
   sex: Sex;
+  active: boolean;
   branches: { studioId: string; name: string }[];
 };
 
@@ -2222,6 +2264,7 @@ export type GymTeacherDetail = {
   phone: string;
   username: string;
   sex: Sex;
+  active: boolean;
   assigned: GymTeacherBranch[];
   available: { studioId: string; name: string; dayHours: StudioDayHours[] }[];
   clients: GymTeacherClient[];
@@ -2350,6 +2393,7 @@ async function loadGymTeacherDetail(
     phone,
     username: account?.username ?? "",
     sex: roster?.sex ?? "other",
+    active: roster?.active ?? true,
     assigned,
     available,
     clients,
@@ -2410,6 +2454,7 @@ export async function listGymTeachers(): Promise<GymTeacherSummary[]> {
       phone: item.phone ?? "",
       username: usernameById.get(item.userId) ?? "",
       sex: item.sex ?? "other",
+      active: item.active ?? true,
       branches: branchesByTeacher.get(item.userId) ?? [],
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "es"));
@@ -2697,7 +2742,8 @@ export async function unassignTeacherFromBranch(input: {
 async function requireStudioTeacher(studioId: string, teacherUserId?: string) {
   const id = teacherUserId?.trim() ?? "";
   if (!id) throw new Error("Asigna un profesor al alumno.");
-  const [teacher] = await getDb()
+  const db = getDb();
+  const [teacher] = await db
     .select()
     .from(studioMemberships)
     .where(
@@ -2709,7 +2755,46 @@ async function requireStudioTeacher(studioId: string, teacherUserId?: string) {
     )
     .limit(1);
   if (!teacher) throw new Error("Ese profesor no está en el gimnasio.");
+  const [studio] = await db
+    .select({ ownerUserId: studios.ownerUserId })
+    .from(studios)
+    .where(eq(studios.id, studioId))
+    .limit(1);
+  if (studio?.ownerUserId) {
+    const [roster] = await db
+      .select({ active: gymTeachers.active })
+      .from(gymTeachers)
+      .where(
+        and(
+          eq(gymTeachers.ownerUserId, studio.ownerUserId),
+          eq(gymTeachers.userId, id)
+        )
+      )
+      .limit(1);
+    if (roster && !roster.active) {
+      throw new Error("Ese profesor está desactivado.");
+    }
+  }
   return teacher.userId;
+}
+
+export async function setGymTeacherActive(input: {
+  teacherUserId: string;
+  active: boolean;
+}) {
+  const { userId, branches } = await requireOwnedGym();
+  const teacherUserId = input.teacherUserId.trim();
+  await loadGymTeacherDetail(userId, branches, teacherUserId);
+  await getDb()
+    .update(gymTeachers)
+    .set({ active: input.active })
+    .where(
+      and(
+        eq(gymTeachers.ownerUserId, userId),
+        eq(gymTeachers.userId, teacherUserId)
+      )
+    );
+  return loadGymTeacherDetail(userId, branches, teacherUserId);
 }
 
 export async function assignStudioClient(input: {

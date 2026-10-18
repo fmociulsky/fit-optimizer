@@ -128,10 +128,18 @@ export function StudioClientForm({
   const [billingPlan, setBillingPlan] = useState<ClientBillingPlan | null>(
     null
   );
+  const [feeAmount, setFeeAmount] = useState("");
   const [serviceStartsOn, setServiceStartsOn] = useState(todayBillingYmd());
   const [busy, setBusy] = useState(false);
   const teachers =
-    dash?.people.filter((item) => item.role === "teacher" && item.userId) ?? [];
+    dash?.people.filter(
+      (item) =>
+        item.role === "teacher" &&
+        item.userId &&
+        (item.active ||
+          item.userId === teacherId ||
+          item.userId === initial?.assignedTeacherUserId)
+    ) ?? [];
   const studioKinds = dash?.studio.kinds ?? [];
   const chosenTeacher = teacherId || teachers[0]?.userId || "";
   const allowed = Number(sessions);
@@ -165,9 +173,15 @@ export function StudioClientForm({
       toast.error("Elegí una sucursal.");
       return;
     }
+    let parsedFee = 0;
     if (!initial) {
       if (!billingPlan) {
         toast.error("Elegí el plan: mensual, trimestral o anual.");
+        return;
+      }
+      parsedFee = Number.parseInt(feeAmount.replace(/\D/g, ""), 10);
+      if (!Number.isFinite(parsedFee) || parsedFee <= 0) {
+        toast.error("Pon el valor del plan.");
         return;
       }
       if (!serviceStartsOn) {
@@ -197,6 +211,7 @@ export function StudioClientForm({
             ...payload,
             billingPlan: billingPlan!,
             serviceStartsOn,
+            feeAmount: parsedFee,
           });
       onSaved(next);
       if (!initial) {
@@ -207,6 +222,7 @@ export function StudioClientForm({
         setActivities(studioKinds.length === 1 ? studioKinds : []);
         setPicks([]);
         setBillingPlan(null);
+        setFeeAmount("");
         setServiceStartsOn(todayBillingYmd());
       }
       toast.success(initial ? "Alumno actualizado." : "Alumno creado.");
@@ -361,6 +377,17 @@ export function StudioClientForm({
                   </button>
                 ))}
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="client-fee">Valor del plan (ARS)</Label>
+              <Input
+                id="client-fee"
+                className="h-11 text-base"
+                inputMode="numeric"
+                placeholder="45000"
+                value={feeAmount}
+                onChange={(event) => setFeeAmount(event.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="client-start">Día de inicio</Label>

@@ -370,6 +370,11 @@ function StudioTeachersCard({
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
                   <p className="min-w-0 flex-1 truncate font-medium">
                     {person.displayName}
+                    {!person.active ? (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        Desactivado
+                      </span>
+                    ) : null}
                   </p>
                   <p className="hidden min-w-0 max-w-[10rem] truncate text-sm text-muted-foreground sm:block">
                     {person.phone || "—"}
@@ -531,7 +536,7 @@ function StudioClientsCard({
   const [editing, setEditing] = useState<StudioClientDraft | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const teachers = dash.people.filter(
-    (item) => item.role === "teacher" && item.userId
+    (item) => item.role === "teacher" && item.userId && item.active
   );
   const clients = dash.people.filter((item) => item.role === "client");
   const visibleClients = useMemo(
@@ -714,10 +719,18 @@ function StudioClientsCard({
                   <ClientTeacherAssign
                     studioId={dash.studio.id}
                     person={person}
-                    teachers={teachers.map((teacher) => ({
-                      userId: teacher.userId!,
-                      displayName: teacher.displayName,
-                    }))}
+                    teachers={dash.people
+                      .filter(
+                        (item) =>
+                          item.role === "teacher" &&
+                          item.userId &&
+                          (item.active ||
+                            item.userId === person.assignedTeacherUserId)
+                      )
+                      .map((teacher) => ({
+                        userId: teacher.userId!,
+                        displayName: teacher.displayName,
+                      }))}
                     onSaved={onChange}
                   />
                   <div>
