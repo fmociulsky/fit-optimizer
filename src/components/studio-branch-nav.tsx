@@ -12,7 +12,7 @@ export function StudioBranchNav({
 }: {
   studioId: string;
   name: string;
-  active: "detalles" | "profesores" | "alumnos";
+  active: "detalles" | "profesores" | "alumnos" | "ausencias";
 }) {
   return (
     <header>
@@ -25,6 +25,7 @@ export function StudioBranchNav({
           [
             ["profesores", "Profesores", "/profesores"],
             ["alumnos", "Alumnos", "/alumnos"],
+            ["ausencias", "Ausencias", "/ausencias"],
             ["detalles", "Detalles", ""],
           ] as const
         ).map(([id, label, suffix]) => (

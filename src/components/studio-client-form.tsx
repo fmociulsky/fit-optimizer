@@ -41,6 +41,8 @@ export type StudioClientDraft = {
   phone: string;
   email: string;
   birthDate: string;
+  emergencyName: string;
+  emergencyPhone: string;
   activities: StudioKind[];
   sessionsPerWeek: number | null;
   assignedTeacherUserId: string | null;
@@ -281,18 +283,35 @@ export function StudioClientForm({
             onChange={(event) => setPhone(event.target.value)}
           />
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="client-birth">Fecha de nacimiento</Label>
-          <Input
-            id="client-birth"
-            type="date"
-            className="h-11 text-base"
-            value={birthDate}
-            onChange={(event) => setBirthDate(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5 sm:col-span-2">
-          <Label>Actividad</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="client-birth">Fecha de nacimiento</Label>
+            <Input
+              id="client-birth"
+              type="date"
+              className="h-11 text-base"
+              value={birthDate}
+              onChange={(event) => setBirthDate(event.target.value)}
+            />
+          </div>
+          {editing ? (
+            <div className="space-y-1.5 sm:col-span-2 rounded-xl border border-foreground/8 bg-muted/30 px-3 py-3">
+              <p className="text-sm font-medium">Contacto de emergencia</p>
+              {initial?.emergencyName || initial?.emergencyPhone ? (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {[initial.emergencyName, initial.emergencyPhone]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  El alumno todavía no cargó un contacto de emergencia en
+                  Datos.
+                </p>
+              )}
+            </div>
+          ) : null}
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>Actividad</Label>
           {studioKinds.length <= 1 ? (
             <p className="text-sm text-muted-foreground">
               {studioKindsLabel(studioKinds.length ? studioKinds : ["gym"])}

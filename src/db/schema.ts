@@ -40,6 +40,23 @@ export const accounts = pgTable(
     passwordHash: text("password_hash").notNull().default(""),
     code: text("code").unique(),
     linkedProfessionalId: text("linked_professional_id"),
+    /** Contrato Enforma (cuentas role=studio): si está apagado, nadie del gimnasio entra. */
+    serviceActive: boolean("service_active").notNull().default(true),
+    serviceStartsOn: text("service_starts_on").notNull().default(""),
+    serviceEndsOn: text("service_ends_on").notNull().default(""),
+    serviceFeeAmount: integer("service_fee_amount"),
+    /** Máximo de sucursales que puede dar de alta el gimnasio. */
+    maxBranches: integer("max_branches").notNull().default(1),
+    /** Cobro del contrato Enforma (cuentas role=studio). */
+    servicePaymentStatus: text("service_payment_status")
+      .$type<"current" | "overdue">()
+      .notNull()
+      .default("current"),
+    serviceLastPaidOn: text("service_last_paid_on").notNull().default(""),
+    /** Contacto comercial / responsable del gimnasio contratado. */
+    contactName: text("contact_name").notNull().default(""),
+    contactPhone: text("contact_phone").notNull().default(""),
+    contactEmail: text("contact_email").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -111,6 +128,9 @@ export const studioMemberships = pgTable(
     phone: text("phone").notNull().default(""),
     email: text("email").notNull().default(""),
     birthDate: text("birth_date").notNull().default(""),
+    photoData: text("photo_data").notNull().default(""),
+    emergencyName: text("emergency_name").notNull().default(""),
+    emergencyPhone: text("emergency_phone").notNull().default(""),
     activities: jsonb("activities").$type<StudioKind[]>().notNull().default(["gym"]),
     paymentStatus: text("payment_status")
       .$type<ClientPaymentStatus>()
@@ -247,6 +267,30 @@ export type ProposedTeacherShift = {
   endHour: string;
   capacityPerSlot?: number;
 };
+
+/** Avisos de ausencia de un alumno para una fecha concreta (libera cupo ese día). */
+export const studioAbsences = pgTable(
+  "studio_absences",
+  {
+    id: text("id").primaryKey(),
+    studioId: text("studio_id").notNull(),
+    clientUserId: text("client_user_id").notNull(),
+    absentOn: text("absent_on").notNull(),
+    weekday: integer("weekday").notNull(),
+    slotStart: text("slot_start").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("studio_absences_client_day").on(
+      table.studioId,
+      table.clientUserId,
+      table.absentOn
+    ),
+    index("studio_absences_studio_day_idx").on(table.studioId, table.absentOn),
+  ]
+);
 
 /** Pedidos de cambio de horario del profesor, pendientes de aprobación del estudio. */
 export const studioShiftRequests = pgTable(

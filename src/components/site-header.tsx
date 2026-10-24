@@ -13,6 +13,7 @@ import {
   ChartColumn,
   Dumbbell,
   GraduationCap,
+  LogOut,
   MapPin,
   Menu,
   RefreshCw,
@@ -44,6 +45,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [rearmar, setRearmar] = useState(false);
   const hasPlan = ready && Boolean(state);
+  const isAdmin = account?.role === "admin";
   const isPro = account?.role === "professional";
   const isStudio = account?.role === "studio";
   const isStudioClient = account?.role === "client" && account.studioRole === "client";
@@ -90,29 +92,27 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
           <Show when="signed-in">
             <UserButton />
           </Show>
-          <Show when="signed-out">
-            {isLocalSession ? (
-              <>
-                {account?.username ? (
-                  <span className="max-w-36 truncate text-sm text-muted-foreground">
-                    {account.username}
-                  </span>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-9 px-3"
-                  onClick={() => {
-                    void logoutDemo().then(() => {
-                      window.location.href = "/";
-                    });
-                  }}
-                >
-                  Salir
-                </Button>
-              </>
-            ) : null}
-          </Show>
+          {isLocalSession ? (
+            <>
+              {account?.username ? (
+                <span className="max-w-36 truncate text-sm text-muted-foreground">
+                  {account.username}
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-9 px-3"
+                onClick={() => {
+                  void logoutDemo().then(() => {
+                    window.location.href = isAdmin ? "/admin" : "/";
+                  });
+                }}
+              >
+                Salir
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -179,6 +179,33 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     Alumno
                   </MenuLink>
                 </>
+              ) : isAdmin ? (
+                <>
+                  <MenuLink
+                    href="/admin/estudios"
+                    active={
+                      pathname === "/admin/estudios" ||
+                      pathname.startsWith("/admin/estudios/")
+                    }
+                    icon={Building2}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Estudios contratados
+                  </MenuLink>
+                  <button
+                    type="button"
+                    className="mt-2 flex h-11 items-center gap-3 rounded-2xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    onClick={() => {
+                      setOpen(false);
+                      void logoutDemo().then(() => {
+                        window.location.href = "/admin";
+                      });
+                    }}
+                  >
+                    <LogOut className="size-4 shrink-0" />
+                    Salir
+                  </button>
+                </>
               ) : isStudio ? (
                 <>
                   <MenuLink
@@ -189,7 +216,8 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                         !pathname.startsWith("/estudio/profesores") &&
                         !pathname.startsWith("/estudio/alumnos") &&
                         !pathname.startsWith("/estudio/cuentas") &&
-                        !pathname.startsWith("/estudio/estadisticas"))
+                        !pathname.startsWith("/estudio/estadisticas") &&
+                        !pathname.startsWith("/estudio/datos"))
                     }
                     icon={Building2}
                     onNavigate={() => setOpen(false)}
@@ -240,6 +268,17 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   >
                     Estadísticas
                   </MenuLink>
+                  <MenuLink
+                    href="/estudio/datos"
+                    active={
+                      pathname === "/estudio/datos" ||
+                      pathname.startsWith("/estudio/datos/")
+                    }
+                    icon={UserRound}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Datos
+                  </MenuLink>
                 </>
               ) : isPro ? (
                 <>
@@ -257,6 +296,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                       pathname === "/profesor/alumnos" ||
                       (pathname.startsWith("/profesor/") &&
                         !pathname.startsWith("/profesor/sucursales") &&
+                        !pathname.startsWith("/profesor/datos") &&
                         pathname !== "/profesor")
                     }
                     icon={GraduationCap}
@@ -274,6 +314,17 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     onNavigate={() => setOpen(false)}
                   >
                     Sucursales
+                  </MenuLink>
+                  <MenuLink
+                    href="/profesor/datos"
+                    active={
+                      pathname === "/profesor/datos" ||
+                      pathname.startsWith("/profesor/datos/")
+                    }
+                    icon={UserRound}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Datos
                   </MenuLink>
                 </>
               ) : (

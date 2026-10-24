@@ -6,6 +6,7 @@ import { useAuth } from "@clerk/nextjs";
 import { useAppStore } from "@/components/app-provider";
 import {
   clientHomeHref,
+  isAdminPath,
   isClientPath,
   isProfessionalPath,
   isStudioPath,
@@ -25,17 +26,26 @@ export function RoleGate({ children }: { children: React.ReactNode }) {
       pathname.startsWith("/entrar-profesor") ||
       pathname.startsWith("/entrar-usuario") ||
       pathname.startsWith("/entrar-estudio") ||
-      pathname.startsWith("/unirse")
+      pathname.startsWith("/unirse") ||
+      pathname === "/admin"
     ) {
       return;
     }
     const signedIn = Boolean(userId) || Boolean(account);
     if (!signedIn) return;
     if (!account) {
-      if (pathname !== "/rol") router.replace("/rol");
+      if (pathname !== "/rol" && !isAdminPath(pathname)) router.replace("/rol");
       return;
     }
     if (pathname === "/") {
+      router.replace(clientHomeHref(account, Boolean(state)));
+      return;
+    }
+    if (account.role === "admin") {
+      if (!isAdminPath(pathname)) router.replace("/admin/estudios");
+      return;
+    }
+    if (isAdminPath(pathname)) {
       router.replace(clientHomeHref(account, Boolean(state)));
       return;
     }

@@ -240,7 +240,7 @@ export interface PersistedUser {
   draft: OnboardingDraft | null;
 }
 
-export type AccountRole = "client" | "professional" | "studio";
+export type AccountRole = "client" | "professional" | "studio" | "admin";
 export type StudioMemberRole = "owner" | "teacher" | "client";
 
 /** Estado de cuenta / pago del alumno en el estudio. */

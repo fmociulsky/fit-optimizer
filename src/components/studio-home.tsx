@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Building2, GraduationCap, MapPin, Pencil, Phone, Plus, Users } from "lucide-react";
+import {
+  Building2,
+  CalendarOff,
+  GraduationCap,
+  MapPin,
+  Pencil,
+  Phone,
+  Plus,
+  Users,
+} from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { StudioBranchForm } from "@/components/studio-branch-form";
 import { StudioDayAgenda } from "@/components/studio-day-agenda";
@@ -10,7 +19,9 @@ import { StudioShiftRequestsPanel } from "@/components/studio-shift-requests";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
+  getOwnedBranchQuota,
   listOwnedBranches,
+  type OwnedBranchQuota,
   type StudioBranchSummary,
 } from "@/lib/studio";
 import { studioHoursSummary, studioKindsLabel } from "@/lib/labels";
@@ -18,18 +29,23 @@ import { cn } from "@/lib/utils";
 
 export function StudioHome() {
   const [rows, setRows] = useState<StudioBranchSummary[] | null>(null);
+  const [quota, setQuota] = useState<OwnedBranchQuota | null>(null);
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    void listOwnedBranches()
-      .then((next) => {
-        if (!cancelled) setRows(next);
+    void Promise.all([listOwnedBranches(), getOwnedBranchQuota()])
+      .then(([nextRows, nextQuota]) => {
+        if (cancelled) return;
+        setRows(nextRows);
+        setQuota(nextQuota);
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           setLoadError(
-            error instanceof Error ? error.message : "No se pudieron cargar las sucursales."
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las sucursales."
           );
         }
       });
@@ -67,15 +83,29 @@ export function StudioHome() {
           </h1>
           <p className="mt-3 max-w-xl text-muted-foreground">
             Nombre, tipo, dirección, teléfono y los días que abre. Después
-            cargas profesores y alumnos en esa sucursal.
+            sumás profesores y alumnos en esa sucursal.
+            {quota
+              ? ` Tu plan permite hasta ${quota.max} sucursal${
+                  quota.max === 1 ? "" : "es"
+                }.`
+              : ""}
           </p>
           <div className="mt-8">
-            <StudioBranchForm embedded />
+            {quota && !quota.canAdd ? (
+              <p className="rounded-xl border border-foreground/8 bg-card px-4 py-3 text-sm text-muted-foreground">
+                Alcanzaste el máximo de sucursales de tu contrato. Pedile a
+                Enforma ampliar el plan.
+              </p>
+            ) : (
+              <StudioBranchForm embedded />
+            )}
           </div>
         </main>
       </div>
     );
   }
+
+  const canAdd = quota?.canAdd !== false;
 
   return (
     <div className="min-h-svh bg-background">
@@ -91,15 +121,22 @@ export function StudioHome() {
             </h1>
             <p className="mt-3 max-w-xl text-muted-foreground">
               Cada sucursal tiene su horario, profesores y alumnos.
+              {quota ? ` Usás ${quota.used} de ${quota.max} permitidas.` : ""}
             </p>
           </div>
-          <Link
-            href="/estudio/nueva"
-            className={cn(buttonVariants(), "h-11 px-5")}
-          >
-            <Plus className="size-4" data-icon="inline-start" />
-            Nueva sucursal
-          </Link>
+          {canAdd ? (
+            <Link
+              href="/estudio/nueva"
+              className={cn(buttonVariants(), "h-11 px-5")}
+            >
+              <Plus className="size-4" data-icon="inline-start" />
+              Nueva sucursal
+            </Link>
+          ) : (
+            <p className="max-w-xs text-sm text-muted-foreground sm:text-right">
+              Máximo de sucursales alcanzado. Pedile a Enforma ampliar el plan.
+            </p>
+          )}
         </div>
 
         <StudioShiftRequestsPanel />
@@ -157,6 +194,13 @@ export function StudioHome() {
                 >
                   <Users className="size-4" data-icon="inline-start" />
                   Alumnos
+                </Link>
+                <Link
+                  href={`/estudio/${row.studio.id}/ausencias`}
+                  className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}
+                >
+                  <CalendarOff className="size-4" data-icon="inline-start" />
+                  Ausencias
                 </Link>
                 <Link
                   href={`/estudio/${row.studio.id}`}

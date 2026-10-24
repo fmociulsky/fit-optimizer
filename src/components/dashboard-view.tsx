@@ -17,6 +17,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { CheckInDialog } from "@/components/check-in-dialog";
+import { ClientBillingHomeCard } from "@/components/client-billing-home";
+import { ClientDayHome } from "@/components/client-day-home";
 import { SiteHeader } from "@/components/site-header";
 import { PlanWarning } from "@/components/plan-warning";
 import { WeightChart } from "@/components/weight-chart";
@@ -148,6 +150,8 @@ export function DashboardView() {
             <p className="mt-3 max-w-xl text-muted-foreground">
               {teacherPendingPlanCopy(assignedTeacher, assignedTeacherSex)}
             </p>
+            <ClientDayHome />
+            <ClientBillingHomeCard />
             <Link
               href="/turnos"
               className="mt-6 flex gap-3 rounded-2xl border border-foreground/8 bg-card p-4 transition-colors hover:border-primary/40"
@@ -256,6 +260,13 @@ export function DashboardView() {
           </div>
           <CheckInDialog due={due} />
         </div>
+
+        {studioStudent ? (
+          <>
+            <ClientDayHome />
+            <ClientBillingHomeCard />
+          </>
+        ) : null}
 
         <div className="mt-6">
           <div className="mb-2 flex justify-between text-sm text-muted-foreground">

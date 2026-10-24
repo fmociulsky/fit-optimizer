@@ -14,9 +14,15 @@ import {
 } from "@/db/schema";
 import { defaultDraftProfile } from "@/lib/metrics";
 import { generatePlan } from "@/lib/plan";
-import { verifyPassword } from "@/lib/password";
+import {
+  hashPassword,
+  parsePassword,
+  parseUsername,
+  verifyPassword,
+} from "@/lib/password";
 import { createProfessionalCode } from "@/lib/roles";
 import { resolveInternalUserIdFromClerk } from "@/lib/clerk-account";
+import { gymServiceAccessError } from "@/lib/studio-service";
 import type { Account, AppState, StudioMemberRole } from "@/lib/types";
 
 const DEMO_PROFESSIONAL_ID = "demo-professional";
@@ -26,9 +32,11 @@ const DEMO_STUDIO_ID = "demo-studio";
 const DEMO_STUDIO_CODE = "EST-123456";
 const DEMO_HEMA_STUDIO_ID = "demo-studio-hema";
 const DEMO_HEMA_STUDIO_CODE = "EST-HEMA01";
+const PLATFORM_ADMIN_ID = "platform-admin";
 const PRO_COOKIE = "enforma-demo-pro";
 const USER_COOKIE = "enforma-demo-user";
 const STUDIO_COOKIE = "enforma-demo-studio";
+const ADMIN_COOKIE = "enforma-admin";
 
 async function ensureDemoClient(professionalUserId: string) {
   const db = getDb();
@@ -229,10 +237,20 @@ export async function getDemoStudioUserId() {
   if (value === "hema" || value === DEMO_HEMA_STUDIO_ID) {
     return DEMO_HEMA_STUDIO_ID;
   }
-  return null;
+  return value;
+}
+
+export async function getAdminUserId() {
+  const jar = await cookies();
+  const value = jar.get(ADMIN_COOKIE)?.value;
+  if (!value) return null;
+  if (value === "1" || value === PLATFORM_ADMIN_ID) return PLATFORM_ADMIN_ID;
+  return value;
 }
 
 export async function getSessionUserId() {
+  const admin = await getAdminUserId();
+  if (admin) return admin;
   const demoPro = await getDemoProfessionalUserId();
   if (demoPro) return demoPro;
   const demoClient = await getDemoClientUserId();
@@ -505,12 +523,60 @@ async function loadLocalClientAccount(userId: string): Promise<Account | null> {
   };
 }
 
+async function loadLocalStudioAccount(userId: string): Promise<Account | null> {
+  if (userId === DEMO_STUDIO_ID) return ensureDemoStudio2222Account();
+  if (userId === DEMO_HEMA_STUDIO_ID) return ensureDemoHemaStudioAccount();
+  const [row] = await getDb()
+    .select()
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (!row || row.role !== "studio") return null;
+  const blocked = await gymServiceAccessError(row.userId);
+  if (blocked) {
+    await logoutDemoProfessional();
+    return null;
+  }
+  return {
+    userId: row.userId,
+    role: "studio",
+    name: row.name || "Estudio",
+    username: row.username,
+    code: row.code,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: "owner",
+  };
+}
+
+async function loadLocalAdminAccount(userId: string): Promise<Account | null> {
+  const [row] = await getDb()
+    .select()
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (!row || row.role !== "admin") return null;
+  return {
+    userId: row.userId,
+    role: "admin",
+    name: row.name || "Administración",
+    username: row.username,
+    code: row.code,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: null,
+  };
+}
+
 export async function loadDemoAccount() {
+  const adminId = await getAdminUserId();
+  if (adminId) return loadLocalAdminAccount(adminId);
   const professionalId = await getDemoProfessionalUserId();
   if (professionalId) return loadLocalProfessionalAccount(professionalId);
   const clientId = await getDemoClientUserId();
   if (clientId) return loadLocalClientAccount(clientId);
-  if (await getDemoStudioUserId()) return ensureDemoStudioAccount();
+  const studioId = await getDemoStudioUserId();
+  if (studioId) return loadLocalStudioAccount(studioId);
   return null;
 }
 
@@ -536,6 +602,8 @@ export async function loginDemoProfessional(username: string, password: string) 
   ) {
     throw new Error("Usuario o contraseña incorrectos.");
   }
+  const blocked = await gymServiceAccessError(row.userId);
+  if (blocked) throw new Error(blocked);
   const account: Account = {
     userId: row.userId,
     role: "professional",
@@ -549,6 +617,7 @@ export async function loginDemoProfessional(username: string, password: string) 
   const jar = await cookies();
   jar.delete(USER_COOKIE);
   jar.delete(STUDIO_COOKIE);
+  jar.delete(ADMIN_COOKIE);
   jar.set(PRO_COOKIE, account.userId, DEMO_COOKIE);
   return account;
 }
@@ -573,6 +642,8 @@ export async function loginDemoClient(username: string, password: string) {
     if (!(await verifyPassword(password, row.passwordHash))) {
       throw new Error("Usuario o contraseña incorrectos.");
     }
+    const blocked = await gymServiceAccessError(row.userId);
+    if (blocked) throw new Error(blocked);
     account = {
       userId: row.userId,
       role: "client",
@@ -587,6 +658,7 @@ export async function loginDemoClient(username: string, password: string) {
   const jar = await cookies();
   jar.delete(PRO_COOKIE);
   jar.delete(STUDIO_COOKIE);
+  jar.delete(ADMIN_COOKIE);
   jar.set(
     USER_COOKIE,
     account.userId === DEMO_CLIENT_ID ? "1" : account.userId,
@@ -600,6 +672,7 @@ export async function loginDemoStudio(username: string, password: string) {
   const jar = await cookies();
   jar.delete(PRO_COOKIE);
   jar.delete(USER_COOKIE);
+  jar.delete(ADMIN_COOKIE);
 
   if (normalized === "hema" && password === "123456") {
     jar.set(STUDIO_COOKIE, DEMO_HEMA_STUDIO_ID, DEMO_COOKIE);
@@ -609,7 +682,115 @@ export async function loginDemoStudio(username: string, password: string) {
     jar.set(STUDIO_COOKIE, "1", DEMO_COOKIE);
     return ensureDemoStudio2222Account();
   }
-  throw new Error("Usuario o contraseña incorrectos.");
+
+  const [row] = await getDb()
+    .select()
+    .from(accounts)
+    .where(eq(accounts.username, normalized))
+    .limit(1);
+  if (
+    !row ||
+    row.role !== "studio" ||
+    !row.passwordHash ||
+    !(await verifyPassword(password, row.passwordHash))
+  ) {
+    throw new Error("Usuario o contraseña incorrectos.");
+  }
+  const blocked = await gymServiceAccessError(row.userId);
+  if (blocked) throw new Error(blocked);
+  jar.set(STUDIO_COOKIE, row.userId, DEMO_COOKIE);
+  return {
+    userId: row.userId,
+    role: "studio" as const,
+    name: row.name || "Estudio",
+    username: row.username,
+    code: row.code,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: "owner" as const,
+  };
+}
+
+/** Asegura la cuenta de administración de la plataforma (no aparece en el login general). */
+export async function ensurePlatformAdminAccount() {
+  const db = getDb();
+  const username = (
+    process.env.ENFORMA_ADMIN_USERNAME || "enforma"
+  ).trim().toLowerCase();
+  const rawPassword = process.env.ENFORMA_ADMIN_PASSWORD || "Enforma1";
+  const [existing] = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.userId, PLATFORM_ADMIN_ID))
+    .limit(1);
+  const now = new Date();
+  if (!existing) {
+    await db.insert(accounts).values({
+      userId: PLATFORM_ADMIN_ID,
+      role: "admin",
+      name: "Administración Enforma",
+      username,
+      passwordHash: await hashPassword(parsePassword(rawPassword)),
+      code: null,
+      linkedProfessionalId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return;
+  }
+  if (existing.role !== "admin" || existing.username !== username) {
+    await db
+      .update(accounts)
+      .set({
+        role: "admin",
+        name: existing.name || "Administración Enforma",
+        username,
+        updatedAt: now,
+      })
+      .where(eq(accounts.userId, PLATFORM_ADMIN_ID));
+  }
+  if (!existing.passwordHash) {
+    await db
+      .update(accounts)
+      .set({
+        passwordHash: await hashPassword(parsePassword(rawPassword)),
+        updatedAt: now,
+      })
+      .where(eq(accounts.userId, PLATFORM_ADMIN_ID));
+  }
+}
+
+export async function loginAdmin(username: string, password: string) {
+  await ensurePlatformAdminAccount();
+  const normalized = parseUsername(username);
+  const [row] = await getDb()
+    .select()
+    .from(accounts)
+    .where(eq(accounts.username, normalized))
+    .limit(1);
+  if (
+    !row ||
+    row.role !== "admin" ||
+    !row.passwordHash ||
+    !(await verifyPassword(password, row.passwordHash))
+  ) {
+    throw new Error("Usuario o contraseña incorrectos.");
+  }
+  const jar = await cookies();
+  jar.delete(PRO_COOKIE);
+  jar.delete(USER_COOKIE);
+  jar.delete(STUDIO_COOKIE);
+  jar.set(ADMIN_COOKIE, row.userId, DEMO_COOKIE);
+  return {
+    userId: row.userId,
+    role: "admin" as const,
+    name: row.name || "Administración",
+    username: row.username,
+    code: row.code,
+    linkedProfessionalId: null,
+    linkedProfessionalCode: null,
+    studioRole: null,
+  };
 }
 
 export async function logoutDemoProfessional() {
@@ -617,4 +798,5 @@ export async function logoutDemoProfessional() {
   jar.delete(PRO_COOKIE);
   jar.delete(USER_COOKIE);
   jar.delete(STUDIO_COOKIE);
+  jar.delete(ADMIN_COOKIE);
 }

@@ -550,6 +550,8 @@ function StudioClientsCard({
       phone: person.phone,
       email: person.email,
       birthDate: person.birthDate,
+      emergencyName: person.emergencyName,
+      emergencyPhone: person.emergencyPhone,
       activities: person.activities,
       sessionsPerWeek: person.sessionsPerWeek,
       assignedTeacherUserId: person.assignedTeacherUserId,
@@ -681,6 +683,14 @@ function StudioClientsCard({
                       Teléfono: {person.phone}
                     </p>
                   ) : null}
+                  <p className="text-sm text-muted-foreground">
+                    Emergencia:{" "}
+                    {person.emergencyName || person.emergencyPhone
+                      ? [person.emergencyName, person.emergencyPhone]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "sin cargar"}
+                  </p>
                   {person.birthDate ? (
                     <p className="text-sm text-muted-foreground">
                       Nacimiento:{" "}

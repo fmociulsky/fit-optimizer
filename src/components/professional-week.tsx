@@ -14,20 +14,30 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatHour, hourCovers, parseHour } from "@/lib/hours";
-import { WEEKDAYS, weekdayShort } from "@/lib/labels";
+import { WEEKDAYS, weekdayName, weekdayShort } from "@/lib/labels";
 import {
   localNoon,
   monthCells,
   monthLabel,
   sameLocalDay,
 } from "@/lib/agenda";
+import { formatBillingYmd, todayBillingYmd } from "@/lib/client-account";
 import {
   listAssignedTeacherClients,
+  listTeacherClientAbsences,
   loadTeacherStudioHours,
+  type StudioAbsenceView,
   type TeacherAssignedClient,
   type TeacherStudioHours,
 } from "@/lib/studio";
 import { cn } from "@/lib/utils";
+
+function toYmd(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 type DayBlock = {
   studioId: string;
@@ -62,6 +72,7 @@ type DayStudent = {
   displayName: string;
   slotStart: string;
   schedule: DaySlot[];
+  absent: boolean;
 };
 
 function weekdayIndex(weekday: number) {
@@ -83,8 +94,18 @@ function scheduleLine(slots: DaySlot[]) {
 function studentsForShift(
   clients: TeacherAssignedClient[],
   block: DayBlock,
-  weekday: number
+  weekday: number,
+  dateYmd: string,
+  absences: StudioAbsenceView[]
 ): DayStudent[] {
+  const absentIds = new Set(
+    absences
+      .filter(
+        (item) =>
+          item.studioId === block.studioId && item.absentOn === dateYmd
+      )
+      .map((item) => item.clientUserId)
+  );
   const rows: DayStudent[] = [];
   for (const client of clients) {
     if (client.studioId !== block.studioId) continue;
@@ -99,10 +120,12 @@ function studentsForShift(
       displayName: client.displayName,
       slotStart: today.slotStart,
       schedule: client.reservations,
+      absent: absentIds.has(client.userId),
     });
   }
   rows.sort(
     (a, b) =>
+      Number(a.absent) - Number(b.absent) ||
       a.slotStart.localeCompare(b.slotStart) ||
       a.displayName.localeCompare(b.displayName, "es")
   );
@@ -115,6 +138,7 @@ export function ProfessionalWeek() {
     null
   );
   const [clients, setClients] = useState<TeacherAssignedClient[] | null>(null);
+  const [absences, setAbsences] = useState<StudioAbsenceView[]>([]);
   const [loadError, setLoadError] = useState("");
   const [clientsError, setClientsError] = useState("");
   const [selected, setSelected] = useState(() => localNoon(new Date()));
@@ -151,6 +175,13 @@ export function ProfessionalWeek() {
           );
           setClients([]);
         }
+      });
+    void listTeacherClientAbsences()
+      .then((rows) => {
+        if (!cancelled) setAbsences(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setAbsences([]);
       });
     return () => {
       cancelled = true;
@@ -200,9 +231,71 @@ export function ProfessionalWeek() {
     setOpenBlock(null);
   }
 
+  const selectedYmd = toYmd(selected);
   const openStudents = openBlock
-    ? studentsForShift(clients ?? [], openBlock, selected.getDay())
+    ? studentsForShift(
+        clients ?? [],
+        openBlock,
+        selected.getDay(),
+        selectedYmd,
+        absences
+      )
     : [];
+  const todayYmd = todayBillingYmd();
+  const todayAbsences = absences.filter((item) => item.absentOn === todayYmd);
+  const upcomingAbsences = absences.filter(
+    (item) => item.absentOn > todayYmd
+  );
+
+  const shiftHome = useMemo(() => {
+    if (!studioHours?.length || clients === null) return null;
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const base = localNoon(now);
+    for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+      const date = new Date(base);
+      date.setDate(base.getDate() + dayOffset);
+      const weekday = date.getDay();
+      const dateYmd = toYmd(date);
+      const blocks = blocksByWeekday.get(weekday) ?? [];
+      for (const block of blocks) {
+        if (dayOffset === 0) {
+          const end = parseHour(block.endHour);
+          if (end != null && end <= nowMinutes) continue;
+        }
+        const students = studentsForShift(
+          clients,
+          block,
+          weekday,
+          dateYmd,
+          absences
+        );
+        const absentCount = students.filter((item) => item.absent).length;
+        const presentCount = students.length - absentCount;
+        return {
+          block,
+          dayOffset,
+          weekday,
+          studentCount: students.length,
+          presentCount,
+          absentCount,
+          isCurrent:
+            dayOffset === 0 &&
+            (() => {
+              const start = parseHour(block.startHour);
+              const end = parseHour(block.endHour);
+              return (
+                start != null &&
+                end != null &&
+                nowMinutes >= start &&
+                nowMinutes < end
+              );
+            })(),
+        };
+      }
+    }
+    return null;
+  }, [absences, blocksByWeekday, clients, studioHours]);
 
   if (!ready || studioHours === null) {
     return (
@@ -225,6 +318,91 @@ export function ProfessionalWeek() {
         <p className="mt-3 max-w-xl text-muted-foreground">
           En qué sucursal estás cada día, y en qué horario.
         </p>
+
+        {shiftHome ? (
+          <section className="mt-6 rounded-3xl border border-primary/25 bg-primary/8 px-5 py-5">
+            <p className="text-sm font-medium tracking-wide text-primary uppercase">
+              {shiftHome.isCurrent
+                ? "Ahora"
+                : shiftHome.dayOffset === 0
+                  ? "Próximo hoy"
+                  : "Próximo turno"}
+            </p>
+            <h2 className="mt-1 font-heading text-3xl tracking-tight italic sm:text-4xl">
+              {clock(shiftHome.block.startHour)}
+              <span className="text-muted-foreground">
+                –{clock(shiftHome.block.endHour)}
+              </span>
+            </h2>
+            <p className="mt-2 text-muted-foreground">
+              {shiftHome.block.studioName}
+              {shiftHome.dayOffset === 0
+                ? ""
+                : ` · ${weekdayName(shiftHome.weekday)}`}
+              {" · "}
+              {shiftHome.studentCount === 0
+                ? "sin alumnos asignados"
+                : shiftHome.studentCount === 1
+                  ? "1 alumno"
+                  : `${shiftHome.studentCount} alumnos`}
+              {shiftHome.absentCount > 0
+                ? ` · ${shiftHome.absentCount} ${
+                    shiftHome.absentCount === 1 ? "avisó" : "avisaron"
+                  }`
+                : ""}
+              {shiftHome.studentCount > 0 && shiftHome.absentCount > 0
+                ? ` · ${shiftHome.presentCount} van`
+                : ""}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-4"
+              onClick={() => {
+                const date = new Date(today);
+                date.setDate(today.getDate() + shiftHome.dayOffset);
+                choose(date);
+                setOpenBlock(shiftHome.block);
+              }}
+            >
+              Ver alumnos
+            </Button>
+          </section>
+        ) : null}
+
+        {todayAbsences.length > 0 ? (
+          <section className="mt-6 rounded-2xl border border-amber-500/35 bg-amber-500/12 px-4 py-4">
+            <p className="font-medium text-amber-950 dark:text-amber-100">
+              Hoy no vienen
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-amber-950/85 dark:text-amber-50/85">
+              {todayAbsences.map((item) => (
+                <li key={item.id}>
+                  <span className="font-medium">{item.clientName}</span>
+                  {` · ${item.slotStart}`}
+                  {item.studioName ? ` · ${item.studioName}` : ""}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {upcomingAbsences.length > 0 ? (
+          <section className="mt-4 rounded-2xl border border-foreground/8 bg-card px-4 py-4">
+            <p className="font-medium">Próximas ausencias</p>
+            <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+              {upcomingAbsences.slice(0, 6).map((item) => (
+                <li key={item.id}>
+                  <span className="font-medium text-foreground">
+                    {item.clientName}
+                  </span>
+                  {` · ${formatBillingYmd(item.absentOn)} ${item.slotStart}`}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         {loadError ? (
           <p className="mt-6 text-sm text-muted-foreground">{loadError}</p>
@@ -432,11 +610,19 @@ export function ProfessionalWeek() {
                             className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
                           >
                             <span className="min-w-0">
-                              <span className="block font-medium">
+                              <span
+                                className={cn(
+                                  "block font-medium",
+                                  student.absent &&
+                                    "text-muted-foreground line-through opacity-70"
+                                )}
+                              >
                                 {student.displayName}
                               </span>
                               <span className="mt-1 block text-sm text-muted-foreground">
-                                {scheduleLine(student.schedule)}
+                                {student.absent
+                                  ? `Avisó que no va · ${slotLabel(student.slotStart)}`
+                                  : scheduleLine(student.schedule)}
                               </span>
                             </span>
                             <ChevronRight className="size-4 shrink-0 text-primary" />

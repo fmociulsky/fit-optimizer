@@ -104,6 +104,14 @@ export function StudioClientPlanView({
             Cargado por {detail.loadedByName}.
           </p>
         ) : null}
+        {detail.emergencyName || detail.emergencyPhone ? (
+          <p className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-50">
+            Emergencia:{" "}
+            {[detail.emergencyName, detail.emergencyPhone]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        ) : null}
         {medical ? (
           <p className="mt-3 rounded-2xl border border-foreground/8 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
             Salud: {medical}

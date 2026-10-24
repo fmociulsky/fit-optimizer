@@ -39,3 +39,13 @@ export async function requireStudio() {
   }
   return account;
 }
+
+export async function requireAdmin() {
+  const userId = await getSessionUserId();
+  if (!userId) redirect("/admin");
+  const account = await loadAccount();
+  if (!account || account.role !== "admin") {
+    redirect(account ? clientHomeHref(account) : "/admin");
+  }
+  return account;
+}

@@ -14,6 +14,10 @@ export function isStudioRole(role?: string | null) {
   return role === "studio";
 }
 
+export function isAdminRole(role?: string | null) {
+  return role === "admin";
+}
+
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 export function createProfessionalCode() {
@@ -80,6 +84,10 @@ export function isStudioPath(pathname: string) {
   return pathname === "/estudio" || pathname.startsWith("/estudio/");
 }
 
+export function isAdminPath(pathname: string) {
+  return pathname === "/admin" || pathname.startsWith("/admin/");
+}
+
 export function clientHomeHref(
   account?: {
     role?: string | null;
@@ -87,6 +95,7 @@ export function clientHomeHref(
   } | null,
   hasPlan = false
 ) {
+  if (account?.role === "admin") return "/admin/estudios";
   if (account?.role === "professional" || account?.studioRole === "teacher") {
     return "/profesor";
   }

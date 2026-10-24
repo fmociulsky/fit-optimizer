@@ -1,11 +1,12 @@
 "use server";
 
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   accounts,
   coachRequests,
   gymTeachers,
+  studioAbsences,
   studioInvites,
   studioMemberships,
   studioPayments,
@@ -35,15 +36,18 @@ import {
 } from "@/lib/roles";
 import {
   hashPassword,
+  parsePassword,
   parseUsername,
   TEST_ACCOUNT_PASSWORD,
   usernameFromEmail,
+  verifyPassword,
 } from "@/lib/password";
 import { WEEKDAYS } from "@/lib/labels";
 import { getSessionUserId } from "@/lib/session";
 import { planHasExercises } from "@/lib/coach";
 import {
   clientAccountAlert,
+  clientBillingPlanLabel,
   parseClientBillingPlan,
   renewBillingPeriod,
   serviceEndsFromStart,
@@ -191,6 +195,26 @@ function parsePhone(raw: string) {
   const digits = phone.replace(/\D/g, "");
   if (digits.length < 6) throw new Error("Pon un teléfono válido.");
   return phone;
+}
+
+function parseOptionalPhone(raw: string, label: string) {
+  const phone = raw.trim();
+  if (!phone) return "";
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 6) throw new Error(`Pon un ${label} válido.`);
+  return phone;
+}
+
+function parseProfilePhoto(raw: string) {
+  const value = raw.trim();
+  if (!value) return "";
+  if (!/^data:image\/(jpeg|jpg|png|webp);base64,/i.test(value)) {
+    throw new Error("La foto tiene que ser JPG, PNG o WebP.");
+  }
+  if (value.length > 180_000) {
+    throw new Error("La foto es demasiado grande. Probá con otra más chica.");
+  }
+  return value;
 }
 
 function parseEmail(raw: string) {
@@ -559,6 +583,8 @@ export type NextHourPerson = {
   userId: string;
   name: string;
   phone: string;
+  /** Avisó que no asiste ese día (el cupo queda libre). */
+  absent?: boolean;
 };
 
 export type NextHourTeacherGroup = NextHourPerson & {
@@ -597,6 +623,7 @@ function attendanceForSlot(input: {
   members: Map<string, (typeof studioMemberships.$inferSelect)>;
   shifts: (typeof studioTeacherShifts.$inferSelect)[];
   reservations: (typeof studioReservations.$inferSelect)[];
+  absentClientIds: Set<string>;
 }): Omit<DayAgendaSlot, "slotStart"> {
   const teacherIds = new Set<string>();
   for (const shift of input.shifts) {
@@ -616,7 +643,10 @@ function attendanceForSlot(input: {
   const studentsByTeacher = new Map<string, NextHourPerson[]>();
   const unassignedStudents: NextHourPerson[] = [];
   for (const row of slotReservations) {
-    const student = personFromMember(row.clientUserId, input.members, "Alumno");
+    const student: NextHourPerson = {
+      ...personFromMember(row.clientUserId, input.members, "Alumno"),
+      absent: input.absentClientIds.has(row.clientUserId),
+    };
     if (!row.teacherUserId) {
       unassignedStudents.push(student);
       continue;
@@ -625,31 +655,39 @@ function attendanceForSlot(input: {
     list.push(student);
     studentsByTeacher.set(row.teacherUserId, list);
   }
+  const sortStudents = (list: NextHourPerson[]) =>
+    list.sort((a, b) => {
+      if (!!a.absent !== !!b.absent) return a.absent ? 1 : -1;
+      return a.name.localeCompare(b.name, "es");
+    });
   const teachers: NextHourTeacherGroup[] = [...teacherIds]
     .map((userId) => {
-      const students = (studentsByTeacher.get(userId) ?? []).sort((a, b) =>
-        a.name.localeCompare(b.name, "es")
-      );
+      const students = sortStudents(studentsByTeacher.get(userId) ?? []);
       return {
         ...personFromMember(userId, input.members, "Profesor"),
         students,
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name, "es"));
-  unassignedStudents.sort((a, b) => a.name.localeCompare(b.name, "es"));
+  sortStudents(unassignedStudents);
   return { teachers, unassignedStudents };
 }
 
 export async function loadDayAgenda(
   studioId: string,
-  weekday: number
+  weekday: number,
+  dateYmd?: string
 ): Promise<DayAgenda> {
   const { studio } = await requireStudioOwner(studioId);
   const day = Math.round(weekday);
   if (day < 0 || day > 6) throw new Error("Ese día no es válido.");
   const hours = hoursForWeekday(studio.dayHours, day);
+  const absentOn =
+    dateYmd && /^\d{4}-\d{2}-\d{2}$/.test(dateYmd.trim())
+      ? dateYmd.trim()
+      : "";
   const db = getDb();
-  const [members, shifts, reservations] = await Promise.all([
+  const [members, shifts, reservations, absences] = await Promise.all([
     db
       .select()
       .from(studioMemberships)
@@ -667,8 +705,20 @@ export async function loadDayAgenda(
           eq(studioReservations.weekday, day)
         )
       ),
+    absentOn
+      ? db
+          .select({ clientUserId: studioAbsences.clientUserId })
+          .from(studioAbsences)
+          .where(
+            and(
+              eq(studioAbsences.studioId, studio.id),
+              eq(studioAbsences.absentOn, absentOn)
+            )
+          )
+      : Promise.resolve([] as { clientUserId: string }[]),
   ]);
   const memberById = new Map(members.map((item) => [item.userId, item]));
+  const absentClientIds = new Set(absences.map((item) => item.clientUserId));
   const slots = hours
     ? hourSlots(hours.openFrom, hours.openTo).map((slotStart) => ({
         slotStart,
@@ -678,6 +728,7 @@ export async function loadDayAgenda(
           members: memberById,
           shifts,
           reservations,
+          absentClientIds,
         }),
       }))
     : [];
@@ -687,6 +738,36 @@ export async function loadDayAgenda(
     openTo: hours?.openTo ?? null,
     slots,
   };
+}
+
+export type OwnedBranchQuota = {
+  used: number;
+  max: number;
+  canAdd: boolean;
+};
+
+/** Cupo de sucursales del contrato del gimnasio logueado. */
+export async function getOwnedBranchQuota(): Promise<OwnedBranchQuota> {
+  const userId = await requireUserId();
+  const db = getDb();
+  const [account] = await db
+    .select({
+      role: accounts.role,
+      maxBranches: accounts.maxBranches,
+    })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (account?.role !== "studio") {
+    throw new Error("Solo un gimnasio puede gestionar sucursales.");
+  }
+  const rows = await db
+    .select({ id: studios.id })
+    .from(studios)
+    .where(eq(studios.ownerUserId, userId));
+  const max = Math.max(1, account.maxBranches ?? 1);
+  const used = rows.length;
+  return { used, max, canAdd: used < max };
 }
 
 export async function createStudioBranch(input: StudioBranchInput) {
@@ -700,6 +781,18 @@ export async function createStudioBranch(input: StudioBranchInput) {
     .limit(1);
   if (account?.role !== "studio") {
     throw new Error("Solo un gimnasio puede dar de alta sucursales.");
+  }
+  const existing = await db
+    .select({ id: studios.id })
+    .from(studios)
+    .where(eq(studios.ownerUserId, userId));
+  const maxBranches = Math.max(1, account.maxBranches ?? 1);
+  if (existing.length >= maxBranches) {
+    throw new Error(
+      `Tu contrato permite hasta ${maxBranches} sucursal${
+        maxBranches === 1 ? "" : "es"
+      }. Pedile a Enforma ampliar el plan.`
+    );
   }
   const now = new Date();
   const id = uid();
@@ -840,6 +933,8 @@ export type StudioPerson = {
   email: string;
   username: string;
   birthDate: string;
+  emergencyName: string;
+  emergencyPhone: string;
   activities: StudioKind[];
   role: StudioMemberRole | StudioInviteRole;
   sessionsPerWeek: number | null;
@@ -998,6 +1093,10 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
         email: item.email ?? "",
         username: usernameById.get(item.userId) ?? "",
         birthDate: item.birthDate ?? "",
+        emergencyName:
+          item.role === "client" ? (item.emergencyName ?? "") : "",
+        emergencyPhone:
+          item.role === "client" ? (item.emergencyPhone ?? "") : "",
         activities: memberActivities(item.activities, studio.kinds),
         role: item.role,
         sessionsPerWeek: item.sessionsPerWeek,
@@ -1027,6 +1126,8 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
       email: "",
       username: "",
       birthDate: "",
+      emergencyName: "",
+      emergencyPhone: "",
       activities: memberActivities(null, studio.kinds),
       role: item.role,
       sessionsPerWeek: item.sessionsPerWeek,
@@ -1538,6 +1639,8 @@ export type GymClientSummary = {
   email: string;
   username: string;
   birthDate: string;
+  emergencyName: string;
+  emergencyPhone: string;
   activities: StudioKind[];
   sessionsPerWeek: number | null;
   studioId: string;
@@ -1632,6 +1735,8 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
       email: item.email ?? "",
       username: usernameById.get(item.userId) ?? "",
       birthDate: item.birthDate ?? "",
+      emergencyName: item.emergencyName ?? "",
+      emergencyPhone: item.emergencyPhone ?? "",
       activities: memberActivities(
         item.activities,
         branches.find((branch) => branch.id === item.studioId)?.kinds ?? ["gym"]
@@ -3453,12 +3558,333 @@ export async function loadClientBooking() {
   };
 }
 
+export type ClientTodayHome = {
+  studioName: string;
+  today: {
+    slotStart: string;
+    teacherName: string | null;
+    absent: boolean;
+  } | null;
+  next: {
+    weekday: number;
+    slotStart: string;
+    teacherName: string | null;
+  } | null;
+};
+
+/** Resumen del día para el home del alumno de gimnasio. */
+export async function loadClientTodayHome(): Promise<ClientTodayHome | null> {
+  const booking = await loadClientBooking();
+  if (!booking) return null;
+  const userId = await requireUserId();
+  const teacherNameById = new Map<string, string>();
+  if (booking.teacher) {
+    teacherNameById.set(booking.teacher.userId, booking.teacher.name);
+  }
+  for (const row of booking.mine) {
+    if (row.teacherUserId && row.teacherName) {
+      teacherNameById.set(row.teacherUserId, row.teacherName);
+    }
+  }
+  const resolveTeacher = (teacherUserId: string | null) => {
+    if (teacherUserId && teacherNameById.has(teacherUserId)) {
+      return teacherNameById.get(teacherUserId) ?? null;
+    }
+    return booking.teacher?.name ?? null;
+  };
+  const todayYmd = todayBillingYmd();
+  const todayWeekday = new Date(`${todayYmd}T12:00:00`).getDay();
+  const todayRows = booking.mine
+    .filter((item) => item.weekday === todayWeekday)
+    .sort((a, b) => a.slotStart.localeCompare(b.slotStart));
+  const [absence] = todayRows[0]
+    ? await getDb()
+        .select({ id: studioAbsences.id })
+        .from(studioAbsences)
+        .where(
+          and(
+            eq(studioAbsences.studioId, booking.studio.id),
+            eq(studioAbsences.clientUserId, userId),
+            eq(studioAbsences.absentOn, todayYmd)
+          )
+        )
+        .limit(1)
+    : [null];
+  const today = todayRows[0]
+    ? {
+        slotStart: todayRows[0].slotStart,
+        teacherName: resolveTeacher(todayRows[0].teacherUserId),
+        absent: Boolean(absence),
+      }
+    : null;
+
+  let next: ClientTodayHome["next"] = null;
+  if (!today) {
+    const upcoming = [...booking.mine].sort((a, b) => {
+      const aDelta = (a.weekday - todayWeekday + 7) % 7 || 7;
+      const bDelta = (b.weekday - todayWeekday + 7) % 7 || 7;
+      return aDelta - bDelta || a.slotStart.localeCompare(b.slotStart);
+    });
+    const row = upcoming[0];
+    if (row) {
+      next = {
+        weekday: row.weekday,
+        slotStart: row.slotStart,
+        teacherName: resolveTeacher(row.teacherUserId),
+      };
+    }
+  }
+
+  return {
+    studioName: booking.studio.name,
+    today,
+    next,
+  };
+}
+
+/** El alumno avisa que hoy no asiste y libera el cupo de ese día. */
+export async function markClientAbsenceToday() {
+  const booking = await loadClientBooking();
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  const userId = await requireUserId();
+  const todayYmd = todayBillingYmd();
+  const todayWeekday = new Date(`${todayYmd}T12:00:00`).getDay();
+  const todayRow = booking.mine
+    .filter((item) => item.weekday === todayWeekday)
+    .sort((a, b) => a.slotStart.localeCompare(b.slotStart))[0];
+  if (!todayRow) {
+    throw new Error("Hoy no tenés clase para avisar.");
+  }
+  const db = getDb();
+  const [existing] = await db
+    .select({ id: studioAbsences.id })
+    .from(studioAbsences)
+    .where(
+      and(
+        eq(studioAbsences.studioId, booking.studio.id),
+        eq(studioAbsences.clientUserId, userId),
+        eq(studioAbsences.absentOn, todayYmd)
+      )
+    )
+    .limit(1);
+  if (!existing) {
+    await db.insert(studioAbsences).values({
+      id: uid(),
+      studioId: booking.studio.id,
+      clientUserId: userId,
+      absentOn: todayYmd,
+      weekday: todayWeekday,
+      slotStart: todayRow.slotStart,
+    });
+  }
+  return loadClientTodayHome();
+}
+
+/** Cancela el aviso de ausencia de hoy. */
+export async function cancelClientAbsenceToday() {
+  const booking = await loadClientBooking();
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  const userId = await requireUserId();
+  const todayYmd = todayBillingYmd();
+  await getDb()
+    .delete(studioAbsences)
+    .where(
+      and(
+        eq(studioAbsences.studioId, booking.studio.id),
+        eq(studioAbsences.clientUserId, userId),
+        eq(studioAbsences.absentOn, todayYmd)
+      )
+    );
+  return loadClientTodayHome();
+}
+
+export type StudioAbsenceView = {
+  id: string;
+  studioId: string;
+  studioName: string;
+  clientUserId: string;
+  clientName: string;
+  absentOn: string;
+  weekday: number;
+  slotStart: string;
+  teacherUserId: string | null;
+  teacherName: string | null;
+};
+
+async function absenceViewsForStudios(
+  studioIds: string[],
+  fromYmd: string,
+  toYmd: string
+): Promise<StudioAbsenceView[]> {
+  if (!studioIds.length) return [];
+  const db = getDb();
+  const [rows, members, studioRows, reservations] = await Promise.all([
+    db
+      .select()
+      .from(studioAbsences)
+      .where(
+        and(
+          inArray(studioAbsences.studioId, studioIds),
+          gte(studioAbsences.absentOn, fromYmd),
+          lte(studioAbsences.absentOn, toYmd)
+        )
+      )
+      .orderBy(asc(studioAbsences.absentOn), asc(studioAbsences.slotStart)),
+    db
+      .select()
+      .from(studioMemberships)
+      .where(inArray(studioMemberships.studioId, studioIds)),
+    db
+      .select({ id: studios.id, name: studios.name })
+      .from(studios)
+      .where(inArray(studios.id, studioIds)),
+    db
+      .select()
+      .from(studioReservations)
+      .where(inArray(studioReservations.studioId, studioIds)),
+  ]);
+  if (!rows.length) return [];
+  const nameByMember = new Map(
+    members.map(
+      (item) => [`${item.studioId}:${item.userId}`, item.displayName] as const
+    )
+  );
+  const assignedTeacherByClient = new Map(
+    members
+      .filter((item) => item.role === "client" && item.assignedTeacherUserId)
+      .map(
+        (item) =>
+          [
+            `${item.studioId}:${item.userId}`,
+            item.assignedTeacherUserId as string,
+          ] as const
+      )
+  );
+  const studioNameById = new Map(studioRows.map((item) => [item.id, item.name]));
+  return rows.map((row) => {
+    const reservation = reservations.find(
+      (item) =>
+        item.studioId === row.studioId &&
+        item.clientUserId === row.clientUserId &&
+        item.weekday === row.weekday &&
+        item.slotStart === row.slotStart
+    );
+    const teacherUserId =
+      reservation?.teacherUserId ??
+      assignedTeacherByClient.get(`${row.studioId}:${row.clientUserId}`) ??
+      null;
+    return {
+      id: row.id,
+      studioId: row.studioId,
+      studioName: studioNameById.get(row.studioId) ?? "Sucursal",
+      clientUserId: row.clientUserId,
+      clientName:
+        nameByMember.get(`${row.studioId}:${row.clientUserId}`) ?? "Alumno",
+      absentOn: row.absentOn,
+      weekday: row.weekday,
+      slotStart: row.slotStart,
+      teacherUserId,
+      teacherName: teacherUserId
+        ? (nameByMember.get(`${row.studioId}:${teacherUserId}`) ?? "Profesor")
+        : null,
+    };
+  });
+}
+
+/** Ausencias recientes y próximas de una sucursal. */
+export async function listStudioAbsences(
+  studioId: string
+): Promise<StudioAbsenceView[]> {
+  await requireStudioOwner(studioId);
+  const today = todayBillingYmd();
+  return absenceViewsForStudios(
+    [studioId],
+    shiftYmd(today, -7),
+    shiftYmd(today, 21)
+  );
+}
+
+/** Ausencias de alumnos del profesor (hoy y próximos días). */
+export async function listTeacherClientAbsences(): Promise<
+  StudioAbsenceView[]
+> {
+  const userId = await requireUserId();
+  const members = (await membershipsFor(userId)).filter(
+    (item) => item.role === "teacher"
+  );
+  if (!members.length) return [];
+  const studioIds = members.map((item) => item.studioId);
+  const today = todayBillingYmd();
+  const db = getDb();
+  const [rows, assigned] = await Promise.all([
+    absenceViewsForStudios(studioIds, today, shiftYmd(today, 14)),
+    db
+      .select({
+        studioId: studioMemberships.studioId,
+        userId: studioMemberships.userId,
+      })
+      .from(studioMemberships)
+      .where(
+        and(
+          inArray(studioMemberships.studioId, studioIds),
+          eq(studioMemberships.role, "client"),
+          eq(studioMemberships.assignedTeacherUserId, userId)
+        )
+      ),
+  ]);
+  const assignedKeys = new Set(
+    assigned.map((item) => `${item.studioId}:${item.userId}`)
+  );
+  return rows.filter(
+    (row) =>
+      row.teacherUserId === userId ||
+      assignedKeys.has(`${row.studioId}:${row.clientUserId}`)
+  );
+}
+
+export type ClientBillingHome = {
+  planName: string;
+  planLabel: string;
+  feeAmount: number | null;
+  serviceEndsOn: string;
+  paymentStatus: ClientPaymentStatus;
+  alert: ClientAccountAlert;
+};
+
+/** Estado de cuota para el home del alumno de gimnasio. */
+export async function loadClientBillingHome(): Promise<ClientBillingHome | null> {
+  const userId = await requireUserId();
+  const member = await membershipFor(userId, "client");
+  if (!member || member.role !== "client") return null;
+  const paymentStatus: ClientPaymentStatus =
+    member.paymentStatus === "current" ||
+    member.paymentStatus === "overdue" ||
+    member.paymentStatus === "paused" ||
+    member.paymentStatus === "trial" ||
+    member.paymentStatus === "comp"
+      ? member.paymentStatus
+      : "current";
+  const serviceEndsOn = member.serviceEndsOn ?? "";
+  const planName = member.planName ?? "";
+  return {
+    planName,
+    planLabel: clientBillingPlanLabel(planName),
+    feeAmount: member.feeAmount ?? null,
+    serviceEndsOn,
+    paymentStatus,
+    alert: clientAccountAlert(paymentStatus, serviceEndsOn),
+  };
+}
+
 export type ClientProfile = {
   displayName: string;
   phone: string;
   email: string;
   username: string;
   birthDate: string;
+  photoData: string;
+  emergencyName: string;
+  emergencyPhone: string;
   activities: StudioKind[];
   studioName: string;
 };
@@ -3541,6 +3967,9 @@ export async function loadClientProfile(): Promise<ClientProfile | null> {
     email: member.email || account?.email || "",
     username: account?.username ?? "",
     birthDate: member.birthDate ?? "",
+    photoData: member.photoData ?? "",
+    emergencyName: member.emergencyName ?? "",
+    emergencyPhone: member.emergencyPhone ?? "",
     activities: memberActivities(member.activities, kinds),
     studioName: studioRow?.name ?? "Sucursal",
   };
@@ -3551,6 +3980,9 @@ export async function saveClientProfile(input: {
   phone: string;
   email: string;
   birthDate: string;
+  photoData: string;
+  emergencyName: string;
+  emergencyPhone: string;
 }) {
   const userId = await requireUserId();
   const member = await membershipFor(userId, "client");
@@ -3562,6 +3994,18 @@ export async function saveClientProfile(input: {
   const phone = parsePhone(input.phone);
   const email = parseEmail(input.email);
   const birthDate = parseBirthDate(input.birthDate);
+  const photoData = parseProfilePhoto(input.photoData);
+  const emergencyName = input.emergencyName.trim().slice(0, 80);
+  const emergencyPhone = parseOptionalPhone(
+    input.emergencyPhone,
+    "teléfono de emergencia"
+  );
+  if (emergencyName && !emergencyPhone) {
+    throw new Error("Pon el teléfono del contacto de emergencia.");
+  }
+  if (emergencyPhone && !emergencyName) {
+    throw new Error("Pon el nombre del contacto de emergencia.");
+  }
   const db = getDb();
   const [emailTaken] = await db
     .select({ userId: accounts.userId })
@@ -3576,6 +4020,9 @@ export async function saveClientProfile(input: {
       phone,
       email,
       birthDate,
+      photoData,
+      emergencyName,
+      emergencyPhone,
     })
     .where(eq(studioMemberships.id, member.id));
   const [currentAccount] = await db
@@ -3593,6 +4040,257 @@ export async function saveClientProfile(input: {
     })
     .where(eq(accounts.userId, userId));
   return loadClientProfile();
+}
+
+async function changeAccountPasswordForRole(
+  role: "client" | "teacher" | "studio",
+  input: { currentPassword: string; newPassword: string }
+) {
+  const userId = await requireUserId();
+  const db = getDb();
+  if (role === "client") {
+    const member = await membershipFor(userId, "client");
+    if (!member || member.role !== "client") {
+      throw new Error("No hay un alumno con esta cuenta.");
+    }
+  } else if (role === "teacher") {
+    const member = await membershipFor(userId, "teacher");
+    if (!member || member.role !== "teacher") {
+      throw new Error("No hay un profesor con esta cuenta.");
+    }
+  } else {
+    const [accountRole] = await db
+      .select({ role: accounts.role })
+      .from(accounts)
+      .where(eq(accounts.userId, userId))
+      .limit(1);
+    if (accountRole?.role !== "studio") {
+      throw new Error("No hay un gimnasio con esta cuenta.");
+    }
+  }
+  const [account] = await db
+    .select({ passwordHash: accounts.passwordHash })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (!account?.passwordHash) {
+    throw new Error("Esta cuenta no tiene contraseña para cambiar.");
+  }
+  const current = input.currentPassword;
+  if (!(await verifyPassword(current, account.passwordHash))) {
+    throw new Error("La contraseña actual no es correcta.");
+  }
+  const next = parsePassword(input.newPassword);
+  if (current === next) {
+    throw new Error("La nueva contraseña tiene que ser distinta.");
+  }
+  await db
+    .update(accounts)
+    .set({
+      passwordHash: await hashPassword(next),
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.userId, userId));
+  return { ok: true as const };
+}
+
+/** Cambia la contraseña del alumno desde Datos (pide la actual). */
+export async function changeClientPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}) {
+  return changeAccountPasswordForRole("client", input);
+}
+
+/** Cambia la contraseña del profesor desde Datos (pide la actual). */
+export async function changeTeacherPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}) {
+  return changeAccountPasswordForRole("teacher", input);
+}
+
+/** Cambia la contraseña del gimnasio desde Datos (pide la actual). */
+export async function changeStudioPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+}) {
+  return changeAccountPasswordForRole("studio", input);
+}
+
+export type StudioOwnerProfile = {
+  displayName: string;
+  username: string;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+};
+
+export async function loadStudioOwnerProfile(): Promise<StudioOwnerProfile | null> {
+  const userId = await requireUserId();
+  const [account] = await getDb()
+    .select({
+      role: accounts.role,
+      name: accounts.name,
+      username: accounts.username,
+      contactName: accounts.contactName,
+      contactPhone: accounts.contactPhone,
+      contactEmail: accounts.contactEmail,
+    })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (!account || account.role !== "studio") return null;
+  return {
+    displayName: account.name?.trim() || "Gimnasio",
+    username: account.username ?? "",
+    contactName: account.contactName ?? "",
+    contactPhone: account.contactPhone ?? "",
+    contactEmail: account.contactEmail ?? "",
+  };
+}
+
+/** Actualiza nombre del gimnasio y datos del contacto del estudio. */
+export async function saveStudioOwnerProfile(input: {
+  displayName: string;
+  contactName: string;
+  contactPhone: string;
+  contactEmail?: string;
+}): Promise<StudioOwnerProfile | null> {
+  const userId = await requireUserId();
+  const db = getDb();
+  const [account] = await db
+    .select({ role: accounts.role })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  if (!account || account.role !== "studio") {
+    throw new Error("Solo el gimnasio puede editar estos datos.");
+  }
+  const displayName = input.displayName.trim();
+  if (displayName.length < 2) throw new Error("Pon el nombre del gimnasio.");
+  if (displayName.length > 80) throw new Error("El nombre es demasiado largo.");
+  const contactName = input.contactName.trim().slice(0, 80);
+  if (contactName.length < 2) {
+    throw new Error("Pon el nombre del contacto.");
+  }
+  const contactPhone = input.contactPhone.trim();
+  const phoneDigits = contactPhone.replace(/\D/g, "");
+  if (phoneDigits.length < 6) {
+    throw new Error("Pon un teléfono de contacto válido.");
+  }
+  const contactEmail = (input.contactEmail ?? "").trim().toLowerCase();
+  if (
+    contactEmail &&
+    (contactEmail.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))
+  ) {
+    throw new Error("Pon un email de contacto válido.");
+  }
+  await db
+    .update(accounts)
+    .set({
+      name: displayName,
+      contactName,
+      contactPhone,
+      contactEmail,
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.userId, userId));
+  return loadStudioOwnerProfile();
+}
+
+export type TeacherProfile = {
+  displayName: string;
+  phone: string;
+  email: string;
+  username: string;
+  photoData: string;
+};
+
+export async function loadTeacherProfile(): Promise<TeacherProfile | null> {
+  const userId = await requireUserId();
+  const members = (await membershipsFor(userId)).filter(
+    (item) => item.role === "teacher"
+  );
+  if (!members.length) return null;
+  const [account] = await getDb()
+    .select({
+      name: accounts.name,
+      email: accounts.email,
+      username: accounts.username,
+    })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  const withPhoto = members.find((item) => item.photoData?.trim()) ?? members[0];
+  return {
+    displayName:
+      withPhoto.displayName.trim() || account?.name?.trim() || "Profesor",
+    phone: withPhoto.phone ?? "",
+    email: withPhoto.email || account?.email || "",
+    username: account?.username ?? "",
+    photoData: withPhoto.photoData ?? "",
+  };
+}
+
+export async function saveTeacherProfile(input: {
+  displayName: string;
+  phone: string;
+  email: string;
+  photoData: string;
+}) {
+  const userId = await requireUserId();
+  const members = (await membershipsFor(userId)).filter(
+    (item) => item.role === "teacher"
+  );
+  if (!members.length) {
+    throw new Error("No hay un profesor con esta cuenta.");
+  }
+  const displayName = input.displayName.trim();
+  if (displayName.length < 2) throw new Error("Pon tu nombre.");
+  const phone = parseOptionalPhone(input.phone, "teléfono");
+  if (!phone) throw new Error("Pon un teléfono válido.");
+  const email = parseEmail(input.email);
+  const photoData = parseProfilePhoto(input.photoData);
+  const db = getDb();
+  const [emailTaken] = await db
+    .select({ userId: accounts.userId })
+    .from(accounts)
+    .where(and(eq(accounts.email, email), ne(accounts.userId, userId)))
+    .limit(1);
+  if (emailTaken) throw new Error("Ese email ya está en uso.");
+  const memberIds = members.map((item) => item.id);
+  await db
+    .update(studioMemberships)
+    .set({
+      displayName,
+      phone,
+      email,
+      photoData,
+    })
+    .where(inArray(studioMemberships.id, memberIds));
+  await db
+    .update(gymTeachers)
+    .set({
+      displayName,
+      phone,
+    })
+    .where(eq(gymTeachers.userId, userId));
+  const [currentAccount] = await db
+    .select({ username: accounts.username })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+    .limit(1);
+  await db
+    .update(accounts)
+    .set({
+      name: displayName,
+      email,
+      username: currentAccount?.username || (await uniqueClientUsername(email)),
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.userId, userId));
+  return loadTeacherProfile();
 }
 
 export type TeacherAssignedClient = {

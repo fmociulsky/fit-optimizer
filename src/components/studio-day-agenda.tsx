@@ -31,6 +31,13 @@ function formatDdMmYyyy(date: Date) {
   return `${dd}/${mm}/${date.getFullYear()}`;
 }
 
+function formatYmd(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function sameDay(a: Date, b: Date) {
   return (
     a.getFullYear() === b.getFullYear() &&
@@ -104,8 +111,19 @@ function NameLane({
       ) : (
         <ul className="space-y-0.5">
           {people.map((person) => (
-            <li key={person.userId} className="text-sm font-medium leading-snug">
-              {person.name}
+            <li
+              key={person.userId}
+              className={cn(
+                "text-sm font-medium leading-snug",
+                person.absent && "text-muted-foreground opacity-70"
+              )}
+            >
+              <span className={person.absent ? "line-through" : undefined}>
+                {person.name}
+              </span>
+              {person.absent ? (
+                <span className="ml-1 text-xs font-normal">avisó</span>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -151,7 +169,7 @@ export function StudioDayAgenda({
     if (!dialogOpen) return;
     let cancelled = false;
     setError("");
-    void loadDayAgenda(studioId, weekday)
+    void loadDayAgenda(studioId, weekday, formatYmd(date))
       .then((next) => {
         if (cancelled) return;
         setData(next);

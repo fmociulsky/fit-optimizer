@@ -25,7 +25,12 @@ import {
   normalizeProfessionalCode,
 } from "@/lib/roles";
 import { replacePlanSplit } from "@/lib/schedule";
-import { ensureDemoTeacherAssignment, getSessionUserId } from "@/lib/session";
+import {
+  ensureDemoTeacherAssignment,
+  getSessionUserId,
+  logoutDemoProfessional,
+} from "@/lib/session";
+import { gymServiceAccessError } from "@/lib/studio-service";
 import {
   memberActivities,
   normalizeStudioKinds,
@@ -105,6 +110,17 @@ export async function loadAccount(): Promise<Account | null> {
     .where(eq(accounts.userId, userId))
     .limit(1);
   if (!row) return null;
+  if (
+    row.role === "studio" ||
+    row.role === "professional" ||
+    row.role === "client"
+  ) {
+    const blocked = await gymServiceAccessError(userId);
+    if (blocked) {
+      await logoutDemoProfessional();
+      return null;
+    }
+  }
   return toAccount(row);
 }
 
@@ -123,6 +139,9 @@ async function uniqueCode() {
 }
 
 export async function chooseRole(role: AccountRole): Promise<Account> {
+  if (role === "admin") {
+    throw new Error("Ese rol no se elige desde acá.");
+  }
   const userId = await requireUserId();
   const db = getDb();
   const [current] = await db
@@ -547,6 +566,8 @@ export type StudioClientPlanDetail = {
   displayName: string;
   teacherName: string | null;
   studioNames: string[];
+  emergencyName: string;
+  emergencyPhone: string;
   profile: Profile;
   goal: Goal;
   weeklySplit: WorkoutDay[];
@@ -636,12 +657,20 @@ export async function loadStudioClientPlan(
     )
     .map((studio) => studio.name)
     .filter(Boolean);
+  const withEmergency =
+    memberships.find(
+      (item) => item.emergencyName?.trim() || item.emergencyPhone?.trim()
+    ) ?? memberships[0];
+  const emergencyName = withEmergency?.emergencyName?.trim() ?? "";
+  const emergencyPhone = withEmergency?.emergencyPhone?.trim() ?? "";
   if (!state) {
     return {
       clientUserId,
       displayName,
       teacherName,
       studioNames,
+      emergencyName,
+      emergencyPhone,
       profile: defaultCoachLedProfile({ name: displayName }),
       goal: DEFAULT_COACH_GOAL,
       weeklySplit: [],
@@ -654,6 +683,8 @@ export async function loadStudioClientPlan(
     displayName: state.profile.name.trim() || displayName,
     teacherName,
     studioNames,
+    emergencyName,
+    emergencyPhone,
     profile: state.profile,
     goal: state.goal,
     weeklySplit: state.plan.weeklySplit,

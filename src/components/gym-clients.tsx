@@ -114,6 +114,8 @@ export function GymClientsView() {
       phone: client.phone,
       email: client.email,
       birthDate: client.birthDate,
+      emergencyName: client.emergencyName,
+      emergencyPhone: client.emergencyPhone,
       activities: client.activities,
       sessionsPerWeek: client.sessionsPerWeek,
       assignedTeacherUserId: client.assignedTeacherUserId,
@@ -281,6 +283,14 @@ export function GymClientsView() {
                       Teléfono: {client.phone}
                     </p>
                   ) : null}
+                  <p className="text-sm text-muted-foreground">
+                    Emergencia:{" "}
+                    {client.emergencyName || client.emergencyPhone
+                      ? [client.emergencyName, client.emergencyPhone]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "sin cargar"}
+                  </p>
                   <p className="text-sm text-muted-foreground">
                     Actividad: {studioKindsLabel(client.activities)}
                   </p>
