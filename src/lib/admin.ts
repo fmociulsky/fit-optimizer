@@ -2,7 +2,7 @@
 
 import { desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
-import { accounts, studios } from "@/db/schema";
+import { accounts, studioMemberships, studios, userStates } from "@/db/schema";
 import { formatBillingYmd, todayBillingYmd } from "@/lib/client-account";
 import {
   hashPassword,
@@ -16,6 +16,7 @@ import type {
   StudioServicePaymentStatus,
 } from "@/lib/admin-types";
 import { getSessionUserId } from "@/lib/session";
+import type { AppState, PersistedUser } from "@/lib/types";
 
 export type {
   ContractedStudioDetail,
@@ -401,5 +402,151 @@ export async function markContractedStudioPaid(
   return {
     ...next,
     renewedUntilLabel: formatBillingYmd(serviceEndsOn),
+  };
+}
+
+function monthKeyFromDate(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function monthLabel(key: string) {
+  const [y, m] = key.split("-").map(Number);
+  if (!y || !m) return key;
+  return new Intl.DateTimeFormat("es-AR", {
+    month: "short",
+    year: "numeric",
+  }).format(new Date(y, m - 1, 1));
+}
+
+/** Claves YYYY-MM de los últimos n meses, el más actual primero. */
+function lastNMonthKeys(n: number) {
+  const keys: string[] = [];
+  const now = new Date();
+  for (let i = 0; i < n; i += 1) {
+    keys.push(monthKeyFromDate(new Date(now.getFullYear(), now.getMonth() - i, 1)));
+  }
+  return keys;
+}
+
+function monthEndDate(key: string) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m, 0, 23, 59, 59, 999);
+}
+
+function parsePersistedState(payload: unknown): AppState | null {
+  if (!payload || typeof payload !== "object") return null;
+  const asPersisted = payload as PersistedUser;
+  if (asPersisted.state && typeof asPersisted.state === "object") {
+    return asPersisted.state;
+  }
+  const raw = payload as AppState;
+  if (raw.profile && raw.goal && raw.plan) return raw;
+  return null;
+}
+
+function hasNutritionPlan(payload: unknown) {
+  const state = parsePersistedState(payload);
+  if (!state) return false;
+  return Boolean(state.weeklyMenu || state.nutritionPrefs);
+}
+
+export type PlatformAdminMonth = {
+  key: string;
+  label: string;
+  /** Estudios dados de alta hasta el cierre del mes. */
+  studios: number;
+  /** Cobros registrados ese mes (suma de cuotas con último pago en el mes). */
+  revenue: number;
+  /** Alumnos de estudio dados de alta hasta el cierre del mes. */
+  clients: number;
+};
+
+export type PlatformAdminStats = {
+  months: PlatformAdminMonth[];
+  studioCount: number;
+  clientCount: number;
+  revenueTotal: number;
+  nutritionWithPlan: number;
+  nutritionWithoutPlan: number;
+};
+
+/** Estadísticas de plataforma: estudios, ingresos, alumnos y uso de nutrición. */
+export async function loadPlatformAdminStats(): Promise<PlatformAdminStats> {
+  await requireAdminUserId();
+  const db = getDb();
+  const monthKeys = lastNMonthKeys(12);
+
+  const studioRows = await db
+    .select({
+      userId: accounts.userId,
+      createdAt: accounts.createdAt,
+      serviceFeeAmount: accounts.serviceFeeAmount,
+      serviceLastPaidOn: accounts.serviceLastPaidOn,
+    })
+    .from(accounts)
+    .where(eq(accounts.role, "studio"));
+
+  const clientRows = await db
+    .select({
+      userId: studioMemberships.userId,
+      createdAt: studioMemberships.createdAt,
+    })
+    .from(studioMemberships)
+    .where(eq(studioMemberships.role, "client"));
+
+  const months: PlatformAdminMonth[] = monthKeys.map((key) => {
+    const end = monthEndDate(key);
+    const studiosCount = studioRows.filter(
+      (row) => row.createdAt && row.createdAt.getTime() <= end.getTime()
+    ).length;
+    const clientsCount = new Set(
+      clientRows
+        .filter((row) => row.createdAt && row.createdAt.getTime() <= end.getTime())
+        .map((row) => row.userId)
+    ).size;
+    const revenue = studioRows.reduce((sum, row) => {
+      const paid = row.serviceLastPaidOn?.trim() ?? "";
+      if (!paid.startsWith(key)) return sum;
+      return sum + (row.serviceFeeAmount ?? 0);
+    }, 0);
+    return {
+      key,
+      label: monthLabel(key),
+      studios: studiosCount,
+      revenue,
+      clients: clientsCount,
+    };
+  });
+
+  const clientIds = [...new Set(clientRows.map((row) => row.userId))];
+  let nutritionWithPlan = 0;
+  if (clientIds.length) {
+    const states = await db
+      .select({
+        userId: userStates.userId,
+        payload: userStates.payload,
+      })
+      .from(userStates)
+      .where(inArray(userStates.userId, clientIds));
+    const withPlan = new Set(
+      states
+        .filter((row) => hasNutritionPlan(row.payload))
+        .map((row) => row.userId)
+    );
+    nutritionWithPlan = withPlan.size;
+  }
+  const clientCount = clientIds.length;
+  const nutritionWithoutPlan = Math.max(0, clientCount - nutritionWithPlan);
+  const revenueTotal = months.reduce((sum, month) => sum + month.revenue, 0);
+
+  return {
+    months,
+    studioCount: studioRows.length,
+    clientCount,
+    revenueTotal,
+    nutritionWithPlan,
+    nutritionWithoutPlan,
   };
 }

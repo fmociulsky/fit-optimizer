@@ -4124,6 +4124,7 @@ export type StudioOwnerProfile = {
   contactName: string;
   contactPhone: string;
   contactEmail: string;
+  logoData: string;
 };
 
 export async function loadStudioOwnerProfile(): Promise<StudioOwnerProfile | null> {
@@ -4136,6 +4137,7 @@ export async function loadStudioOwnerProfile(): Promise<StudioOwnerProfile | nul
       contactName: accounts.contactName,
       contactPhone: accounts.contactPhone,
       contactEmail: accounts.contactEmail,
+      logoData: accounts.logoData,
     })
     .from(accounts)
     .where(eq(accounts.userId, userId))
@@ -4147,15 +4149,17 @@ export async function loadStudioOwnerProfile(): Promise<StudioOwnerProfile | nul
     contactName: account.contactName ?? "",
     contactPhone: account.contactPhone ?? "",
     contactEmail: account.contactEmail ?? "",
+    logoData: account.logoData ?? "",
   };
 }
 
-/** Actualiza nombre del gimnasio y datos del contacto del estudio. */
+/** Actualiza nombre, logo y datos del contacto del estudio. */
 export async function saveStudioOwnerProfile(input: {
   displayName: string;
   contactName: string;
   contactPhone: string;
   contactEmail?: string;
+  logoData?: string;
 }): Promise<StudioOwnerProfile | null> {
   const userId = await requireUserId();
   const db = getDb();
@@ -4186,6 +4190,7 @@ export async function saveStudioOwnerProfile(input: {
   ) {
     throw new Error("Pon un email de contacto válido.");
   }
+  const logoData = parseProfilePhoto(input.logoData ?? "");
   await db
     .update(accounts)
     .set({
@@ -4193,6 +4198,7 @@ export async function saveStudioOwnerProfile(input: {
       contactName,
       contactPhone,
       contactEmail,
+      logoData,
       updatedAt: new Date(),
     })
     .where(eq(accounts.userId, userId));

@@ -18,7 +18,6 @@ import {
   Menu,
   RefreshCw,
   Sparkles,
-  UserRound,
   UserPlus,
   Users,
   UtensilsCrossed,
@@ -33,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Show, UserButton } from "@clerk/nextjs";
+import { AccountUserMenu } from "@/components/account-user-menu";
 import { Button } from "@/components/ui/button";
 import { useAppStore } from "@/components/app-provider";
 import { isCoachLed } from "@/lib/coach";
@@ -92,27 +92,21 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
           <Show when="signed-in">
             <UserButton />
           </Show>
-          {isLocalSession ? (
-            <>
-              {account?.username ? (
-                <span className="max-w-36 truncate text-sm text-muted-foreground">
-                  {account.username}
-                </span>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 px-3"
-                onClick={() => {
-                  void logoutDemo().then(() => {
-                    window.location.href = isAdmin ? "/admin" : "/";
-                  });
-                }}
-              >
-                Salir
-              </Button>
-            </>
+          {isAdmin && isLocalSession ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-9 px-3"
+              onClick={() => {
+                void logoutDemo().then(() => {
+                  window.location.href = "/admin";
+                });
+              }}
+            >
+              Salir
+            </Button>
           ) : null}
+          {account && !isAdmin ? <AccountUserMenu /> : null}
         </div>
       </div>
 
@@ -192,6 +186,17 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   >
                     Estudios contratados
                   </MenuLink>
+                  <MenuLink
+                    href="/admin/estadisticas"
+                    active={
+                      pathname === "/admin/estadisticas" ||
+                      pathname.startsWith("/admin/estadisticas/")
+                    }
+                    icon={ChartColumn}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Estadísticas
+                  </MenuLink>
                   <button
                     type="button"
                     className="mt-2 flex h-11 items-center gap-3 rounded-2xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -217,7 +222,8 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                         !pathname.startsWith("/estudio/alumnos") &&
                         !pathname.startsWith("/estudio/cuentas") &&
                         !pathname.startsWith("/estudio/estadisticas") &&
-                        !pathname.startsWith("/estudio/datos"))
+                        !pathname.startsWith("/estudio/datos") &&
+                        !pathname.startsWith("/estudio/configuracion"))
                     }
                     icon={Building2}
                     onNavigate={() => setOpen(false)}
@@ -268,17 +274,6 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                   >
                     Estadísticas
                   </MenuLink>
-                  <MenuLink
-                    href="/estudio/datos"
-                    active={
-                      pathname === "/estudio/datos" ||
-                      pathname.startsWith("/estudio/datos/")
-                    }
-                    icon={UserRound}
-                    onNavigate={() => setOpen(false)}
-                  >
-                    Datos
-                  </MenuLink>
                 </>
               ) : isPro ? (
                 <>
@@ -297,6 +292,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                       (pathname.startsWith("/profesor/") &&
                         !pathname.startsWith("/profesor/sucursales") &&
                         !pathname.startsWith("/profesor/datos") &&
+                        !pathname.startsWith("/profesor/configuracion") &&
                         pathname !== "/profesor")
                     }
                     icon={GraduationCap}
@@ -314,17 +310,6 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     onNavigate={() => setOpen(false)}
                   >
                     Sucursales
-                  </MenuLink>
-                  <MenuLink
-                    href="/profesor/datos"
-                    active={
-                      pathname === "/profesor/datos" ||
-                      pathname.startsWith("/profesor/datos/")
-                    }
-                    icon={UserRound}
-                    onNavigate={() => setOpen(false)}
-                  >
-                    Datos
                   </MenuLink>
                 </>
               ) : (
@@ -347,14 +332,16 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                 >
                   Agenda
                 </MenuLink>
-                <MenuLink
-                  href="/datos"
-                  active={pathname === "/datos"}
-                  icon={UserRound}
-                  onNavigate={() => setOpen(false)}
-                >
-                  Datos personales
-                </MenuLink>
+                {hasPlan ? (
+                  <MenuLink
+                    href="/nutricion"
+                    active={pathname === "/nutricion"}
+                    icon={UtensilsCrossed}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Nutrición
+                  </MenuLink>
+                ) : null}
                 </>
               )}
               {!isStudioClient && (

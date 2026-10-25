@@ -21,6 +21,7 @@ import { ClientBillingHomeCard } from "@/components/client-billing-home";
 import { ClientDayHome } from "@/components/client-day-home";
 import { SiteHeader } from "@/components/site-header";
 import { PlanWarning } from "@/components/plan-warning";
+import { TodayMenuCard } from "@/components/today-menu-card";
 import { WeightChart } from "@/components/weight-chart";
 import { WorkoutDayCard } from "@/components/workout-day-card";
 import { useAppStore } from "@/components/app-provider";
@@ -190,7 +191,7 @@ export function DashboardView() {
   const foodNotes = studioStudent
     ? (state.plan.coachNutrition ?? [])
     : state.plan.nutritionHints;
-  const showFood = !studioStudent || foodNotes.length > 0;
+  const showFood = true;
   const planTeacher = savedTeacher || assignedTeacher;
 
   if (!state.planAcceptedAt) {
@@ -267,6 +268,8 @@ export function DashboardView() {
             <ClientBillingHomeCard />
           </>
         ) : null}
+
+        {state.weeklyMenu ? <TodayMenuCard menu={state.weeklyMenu} /> : null}
 
         <div className="mt-6">
           <div className="mb-2 flex justify-between text-sm text-muted-foreground">
@@ -448,10 +451,11 @@ export function DashboardView() {
                 <div className="flex items-start gap-3">
                   <Apple className="mt-0.5 size-5 shrink-0 text-primary" />
                   <div>
-                    <p className="font-medium">Comer, en bruto</p>
+                    <p className="font-medium">Nutrición</p>
                     <p className="text-sm text-muted-foreground">
-                      Guía orientativa: calorías y un día tipo. No sustituye a
-                      un nutricionista profesional.
+                      {studioStudent
+                        ? "Armá un menú semanal alineado con tu plan de ejercicios y tu objetivo."
+                        : "Guía orientativa: calorías y un día tipo. No sustituye a un nutricionista profesional."}
                     </p>
                   </div>
                 </div>
@@ -459,7 +463,7 @@ export function DashboardView() {
                   href="/nutricion"
                   className={cn(buttonVariants({ variant: "outline" }), "h-11 px-4")}
                 >
-                  Ver nutrición
+                  {studioStudent ? "Armar menú" : "Ver nutrición"}
                 </Link>
               </CardContent>
             </Card>
@@ -725,17 +729,24 @@ export function DashboardView() {
             )}
             {showFood && (
             <div>
-              <h2 className="font-heading text-2xl italic">Comida, en bruto</h2>
-              <ul className="mt-3 list-disc space-y-2 pl-4 text-sm text-muted-foreground">
-                {foodNotes.map((n) => (
-                  <li key={n}>{n}</li>
-                ))}
-              </ul>
+              <h2 className="font-heading text-2xl italic">Nutrición</h2>
+              {foodNotes.length > 0 ? (
+                <ul className="mt-3 list-disc space-y-2 pl-4 text-sm text-muted-foreground">
+                  {foodNotes.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Calorías, un día tipo y un menú semanal pensado con tu
+                  entreno.
+                </p>
+              )}
               <Link
                 href="/nutricion"
                 className={cn(buttonVariants({ variant: "outline" }), "mt-4 h-11 px-4")}
               >
-                Abrir la guía de nutrición
+                {studioStudent ? "Armar menú alimenticio" : "Abrir la guía de nutrición"}
               </Link>
             </div>
             )}

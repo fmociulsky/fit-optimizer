@@ -57,6 +57,8 @@ export const accounts = pgTable(
     contactName: text("contact_name").notNull().default(""),
     contactPhone: text("contact_phone").notNull().default(""),
     contactEmail: text("contact_email").notNull().default(""),
+    /** Logo del gimnasio (cuentas role=studio), data URL. */
+    logoData: text("logo_data").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

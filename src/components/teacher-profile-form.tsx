@@ -7,9 +7,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PASSWORD_HINT, passwordClientError } from "@/lib/password-rules";
 import {
-  changeTeacherPassword,
   loadTeacherProfile,
   saveTeacherProfile,
   type TeacherProfile,
@@ -49,10 +47,6 @@ export function TeacherProfileForm() {
   const [photoData, setPhotoData] = useState("");
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [passwordBusy, setPasswordBusy] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -103,33 +97,6 @@ export function TeacherProfileForm() {
       setPhotoData(await readPhotoAsDataUrl(file));
     } catch (error) {
       toast.error(errorMessage(error));
-    }
-  }
-
-  async function savePassword() {
-    const passwordError = passwordClientError(newPassword);
-    if (passwordError) {
-      toast.error(passwordError);
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error("Las contraseñas nuevas no coinciden.");
-      return;
-    }
-    setPasswordBusy(true);
-    try {
-      await changeTeacherPassword({
-        currentPassword,
-        newPassword,
-      });
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      toast.success("Contraseña actualizada.");
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setPasswordBusy(false);
     }
   }
 
@@ -261,62 +228,6 @@ export function TeacherProfileForm() {
             {busy ? "Guardando…" : "Guardar"}
           </Button>
         </form>
-
-        <section className="mt-10 space-y-4 rounded-2xl border border-foreground/8 bg-card p-4">
-          <div>
-            <p className="font-medium">Cambiar contraseña</p>
-            <p className="mt-1 text-sm text-muted-foreground">{PASSWORD_HINT}</p>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="teacher-current-password">Contraseña actual</Label>
-            <Input
-              id="teacher-current-password"
-              type="password"
-              className="h-11 text-base"
-              autoComplete="current-password"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="teacher-new-password">Nueva contraseña</Label>
-            <Input
-              id="teacher-new-password"
-              type="password"
-              className="h-11 text-base"
-              autoComplete="new-password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="teacher-confirm-password">
-              Repetir nueva contraseña
-            </Label>
-            <Input
-              id="teacher-confirm-password"
-              type="password"
-              className="h-11 text-base"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-            />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11 px-5"
-            disabled={
-              passwordBusy ||
-              !currentPassword ||
-              !newPassword ||
-              !confirmPassword
-            }
-            onClick={() => void savePassword()}
-          >
-            {passwordBusy ? "Guardando…" : "Actualizar contraseña"}
-          </Button>
-        </section>
       </main>
     </div>
   );

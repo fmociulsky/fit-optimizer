@@ -2,10 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, LogOut, Plus } from "lucide-react";
+import { ChartColumn, ChevronRight, Plus } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
-import { useAppStore } from "@/components/app-provider";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { formatBillingYmd, formatClientFee } from "@/lib/client-account";
 import { listContractedStudios } from "@/lib/admin";
 import type { ContractedStudioSummary } from "@/lib/admin-types";
@@ -29,7 +28,6 @@ const statusClass = {
 } as const;
 
 export function AdminStudiosView() {
-  const { logoutDemo } = useAppStore();
   const [rows, setRows] = useState<ContractedStudioSummary[] | null>(null);
   const [loadError, setLoadError] = useState("");
 
@@ -77,25 +75,19 @@ export function AdminStudiosView() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
+              href="/admin/estadisticas"
+              className={cn(buttonVariants({ variant: "outline" }), "h-10 px-4")}
+            >
+              <ChartColumn className="size-4" data-icon="inline-start" />
+              Estadísticas
+            </Link>
+            <Link
               href="/admin/estudios/nuevo"
               className={cn(buttonVariants(), "h-10 px-4")}
             >
               <Plus className="size-4" data-icon="inline-start" />
               Nuevo estudio
             </Link>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 px-4"
-              onClick={() => {
-                void logoutDemo().then(() => {
-                  window.location.href = "/admin";
-                });
-              }}
-            >
-              <LogOut className="size-4" data-icon="inline-start" />
-              Salir
-            </Button>
           </div>
         </div>
 

@@ -77,8 +77,9 @@ export function NutritionView() {
     account?.role === "client" && account.studioRole === "client";
 
   useEffect(() => {
-    if (ready && !state) router.replace("/comenzar");
-  }, [ready, state, router]);
+    if (!ready || state || studioStudent) return;
+    router.replace("/comenzar");
+  }, [ready, state, studioStudent, router]);
 
   useEffect(() => {
     if (!ready || !studioStudent) return;
@@ -99,7 +100,43 @@ export function NutritionView() {
     };
   }, [ready, studioStudent]);
 
-  if (!ready || !state) {
+  if (!ready) {
+    return (
+      <div className="flex min-h-svh items-center justify-center text-muted-foreground">
+        Cargando tu guía…
+      </div>
+    );
+  }
+
+  if (!state) {
+    if (studioStudent) {
+      return (
+        <div className="min-h-svh bg-background">
+          <SiteHeader />
+          <main className="mx-auto w-full max-w-xl px-4 py-10">
+            <p className="text-sm font-medium tracking-wide text-primary uppercase">
+              Nutrición
+            </p>
+            <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
+              Primero tu plan.
+            </h1>
+            <p className="mt-3 text-muted-foreground">
+              Cuando tengas un plan de ejercicios, acá armás un menú semanal
+              alineado con ese entreno y tu objetivo.
+            </p>
+            <Link
+              href="/panel"
+              className={cn(
+                buttonVariants({ variant: "outline" }),
+                "mt-6 h-11 px-4"
+              )}
+            >
+              Ir a mi plan
+            </Link>
+          </main>
+        </div>
+      );
+    }
     return (
       <div className="flex min-h-svh items-center justify-center text-muted-foreground">
         Cargando tu guía…
@@ -115,32 +152,6 @@ export function NutritionView() {
   const teacherLabel = teacherName
     ? `Tu ${role} ${teacherName}`
     : `Tu ${role}`;
-
-  if (studioStudent && teacherFood.length === 0) {
-    return (
-      <div className="min-h-svh bg-background">
-        <SiteHeader />
-        <main className="mx-auto w-full max-w-xl px-4 py-10">
-          <p className="text-sm font-medium tracking-wide text-primary uppercase">
-            Nutrición
-          </p>
-          <h1 className="mt-1 font-heading text-4xl tracking-tight italic">
-            Tu comida.
-          </h1>
-          <p className="mt-3 text-muted-foreground">
-            {teacherLabel} todavía no cargó un plan nutricional. Cuando lo
-            haga, aparece acá.
-          </p>
-          <Link
-            href="/panel"
-            className={cn(buttonVariants({ variant: "outline" }), "mt-6 h-11 px-4")}
-          >
-            Volver al plan
-          </Link>
-        </main>
-      </div>
-    );
-  }
 
   if (!state.nutritionAcceptedAt) {
     return (
@@ -203,13 +214,25 @@ export function NutritionView() {
           Comer, en bruto.
         </h1>
         <p className="mt-3 max-w-2xl text-muted-foreground">
-          {firstName}, esto va con tu plan, no es un menú de revista. Usa las
-          manos como medida y repite platos que puedas aguantar. {guide.summary}
+          {firstName}, esto va con tu plan de ejercicios, no es un menú de
+          revista. Usá las manos como medida y repetí platos que puedas
+          aguantar. {guide.summary}
         </p>
 
         <div className="mt-6">
           <NutritionWarning compact />
         </div>
+
+        {teacherFood.length > 0 ? (
+          <section className="mt-8 rounded-3xl border border-foreground/8 bg-card p-5">
+            <p className="font-medium">Indicaciones de {teacherLabel}</p>
+            <ul className="mt-3 list-disc space-y-1.5 pl-4 text-sm text-muted-foreground">
+              {teacherFood.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Macro label="Calorías / día" value={String(guide.calories)} unit="kcal" />
