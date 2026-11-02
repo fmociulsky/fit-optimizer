@@ -126,6 +126,56 @@ export function todayBillingYmd() {
   return todayYmd();
 }
 
+/** Lunes de la semana que contiene esa fecha. */
+export function mondayOfYmd(ymd: string) {
+  const date = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return ymd;
+  const offset = (date.getDay() + 6) % 7;
+  return shiftYmd(ymd, -offset);
+}
+
+/** Semanas fechadas que se arman hacia adelante, además de la semana que empieza el lunes. */
+export const TURN_WEEKS_AHEAD = 6;
+
+/** El calendario del gimnasio corre en hora de Argentina. */
+export const GYM_TIME_ZONE = "America/Argentina/Buenos_Aires";
+
+/** Fecha de calendario en Argentina. */
+export function gymTodayYmd(now = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: GYM_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/**
+ * El domingo a las 00:00 se libera la semana que empieza al día siguiente.
+ * De lunes a sábado sigue vigente la que se liberó el domingo anterior.
+ */
+export function releasedMonday(ymd: string) {
+  const date = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return mondayOfYmd(ymd);
+  if (date.getDay() === 0) return shiftYmd(ymd, 1);
+  return mondayOfYmd(ymd);
+}
+
+/**
+ * Turnos fechados: desde el 1 del mes en curso hasta el domingo
+ * de la sexta semana después del lunes ya liberado.
+ */
+export function turnGridBounds(today = todayBillingYmd(), now = new Date()) {
+  const [year, month] = today.split("-").map(Number);
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastMonday = shiftYmd(
+    releasedMonday(gymTodayYmd(now)),
+    TURN_WEEKS_AHEAD * 7
+  );
+  const to = shiftYmd(lastMonday, 6);
+  return { from, to, today };
+}
+
 export function shiftYmd(ymd: string, days: number) {
   const date = new Date(`${ymd}T12:00:00`);
   if (Number.isNaN(date.getTime())) {

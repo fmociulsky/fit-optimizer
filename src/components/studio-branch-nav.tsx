@@ -12,7 +12,7 @@ export function StudioBranchNav({
 }: {
   studioId: string;
   name: string;
-  active: "detalles" | "profesores" | "alumnos" | "ausencias";
+  active: "agenda" | "profesores" | "alumnos" | "ausencias" | "detalles";
 }) {
   return (
     <header>
@@ -23,10 +23,11 @@ export function StudioBranchNav({
       <nav className="mt-5 flex flex-wrap gap-2">
         {(
           [
+            ["agenda", "Agenda", ""],
             ["profesores", "Profesores", "/profesores"],
             ["alumnos", "Alumnos", "/alumnos"],
             ["ausencias", "Ausencias", "/ausencias"],
-            ["detalles", "Detalles", ""],
+            ["detalles", "Detalles", "/detalles"],
           ] as const
         ).map(([id, label, suffix]) => (
           <Link

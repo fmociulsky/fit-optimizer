@@ -269,6 +269,7 @@ export interface Account {
 
 export type StudioKind = "pilates" | "gym";
 export type StudioInviteRole = "teacher" | "client";
+export type TurnPlan = "fixed" | "week" | "month";
 
 export function normalizeStudioKinds(
   raw: unknown,
@@ -340,4 +341,8 @@ export interface Studio {
   address: string;
   phone: string;
   capacityPerSlot: number;
+  /** Horas mínimas antes de la clase para ganar un crédito al avisar. */
+  cancelNoticeHours: number;
+  /** Tope de avisos con crédito en el mes de la clase. */
+  maxCancelsPerMonth: number;
 }

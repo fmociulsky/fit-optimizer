@@ -187,3 +187,54 @@ export function weekdayName(id: number) {
 export function weekdayShort(id: number) {
   return WEEKDAYS.find((d) => d.id === id)?.short ?? "—";
 }
+
+const MONTHS_SHORT = [
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+];
+
+const MONTHS_LONG = [
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
+];
+
+/** Día y mes, sin el nombre del día: "6 nov". */
+export function formatDayMonth(ymd: string) {
+  const date = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return ymd;
+  return `${date.getDate()} ${MONTHS_SHORT[date.getMonth()]}`;
+}
+
+/** Fecha de una clase: "Vie 6 nov". */
+export function formatClassDate(ymd: string) {
+  const date = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return ymd;
+  return `${weekdayShort(date.getDay())} ${date.getDate()} ${MONTHS_SHORT[date.getMonth()]}`;
+}
+
+/** Título de mes: "Noviembre 2026". `ym` es YYYY-MM. */
+export function formatMonthTitle(ym: string) {
+  const [year, month] = ym.split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return ym;
+  return `${MONTHS_LONG[month - 1]} ${year}`;
+}

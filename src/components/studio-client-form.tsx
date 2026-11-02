@@ -25,7 +25,7 @@ import {
   updateStudioClient,
   type StudioDashboard,
 } from "@/lib/studio";
-import type { ClientBillingPlan, StudioKind } from "@/lib/types";
+import type { ClientBillingPlan, StudioKind, TurnPlan } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const fieldClass =
@@ -45,6 +45,7 @@ export type StudioClientDraft = {
   emergencyPhone: string;
   activities: StudioKind[];
   sessionsPerWeek: number | null;
+  turnPlan: TurnPlan;
   assignedTeacherUserId: string | null;
   picks: { weekday: number; slotStart: string }[];
 };
@@ -120,6 +121,9 @@ export function StudioClientForm({
   );
   const [sessions, setSessions] = useState(
     String(initial?.sessionsPerWeek || 2)
+  );
+  const [turnPlan, setTurnPlan] = useState<TurnPlan>(
+    initial?.turnPlan ?? "month"
   );
   const [teacherId, setTeacherId] = useState(
     initial?.assignedTeacherUserId ?? ""
@@ -201,6 +205,7 @@ export function StudioClientForm({
         birthDate,
         activities,
         sessionsPerWeek: allowed,
+        turnPlan,
         teacherUserId: chosenTeacher,
         picks,
       };
@@ -245,7 +250,7 @@ export function StudioClientForm({
         <>
           <p className="font-medium">{editing ? "Editar alumno" : "Nuevo alumno"}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Datos personales, plan de pago, actividad, cuántos días va y los
+            Datos personales, plan de pago, actividad, plan de turnos y los
             horarios por defecto. En modo prueba entra con email y contraseña
             1234.
           </p>
@@ -364,6 +369,35 @@ export function StudioClientForm({
               </option>
             ))}
           </select>
+        </div>
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label>Plan de turnos</Label>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {(
+              [
+                ["fixed", "Días fijos", "Si anula, puede anotarse ese mismo día."],
+                ["week", "Por semana", "Cancela y recupera en la misma semana."],
+                ["month", "Por mes", "Cancela y recupera cualquier día del mes."],
+              ] as const
+            ).map(([id, label, hint]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTurnPlan(id)}
+                className={cn(
+                  "rounded-xl border px-3 py-2 text-left",
+                  turnPlan === id
+                    ? "border-primary bg-primary/8 ring-1 ring-primary"
+                    : "border-border hover:border-primary/40"
+                )}
+              >
+                <span className="block text-sm font-medium">{label}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {hint}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="client-sessions">Días por semana</Label>

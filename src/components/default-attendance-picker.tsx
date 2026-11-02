@@ -17,6 +17,8 @@ type DefaultAttendancePickerProps = {
   value: AttendancePick[];
   committed?: AttendancePick[];
   assignedTeacherId?: string | null;
+  /** Alumno: "Te tocan…". Estudio: "Le tocan…". */
+  voice?: "self" | "them";
   onChange: (next: AttendancePick[]) => void;
 };
 
@@ -100,6 +102,7 @@ export function DefaultAttendancePicker({
   value,
   committed = [],
   assignedTeacherId = null,
+  voice = "them",
   onChange,
 }: DefaultAttendancePickerProps) {
   const days = useMemo(() => {
@@ -142,8 +145,12 @@ export function DefaultAttendancePicker({
     if (!current && withoutDay.length >= allowed) {
       toast.error(
         allowed === 1
-          ? "Le toca 1 vez por semana."
-          : `Le tocan ${allowed} veces por semana.`
+          ? voice === "self"
+            ? "Te toca 1 vez por semana."
+            : "Le toca 1 vez por semana."
+          : voice === "self"
+            ? `Te tocan ${allowed} veces por semana.`
+            : `Le tocan ${allowed} veces por semana.`
       );
       return;
     }

@@ -18,6 +18,7 @@ import type {
   Sex,
   StudioKind,
   StudioMemberRole,
+  TurnPlan,
 } from "@/lib/types";
 
 export const userStates = pgTable("user_states", {
@@ -107,6 +108,10 @@ export const studios = pgTable(
     openFrom: text("open_from").notNull().default("08:00"),
     openTo: text("open_to").notNull().default("21:00"),
     capacityPerSlot: integer("capacity_per_slot").notNull().default(8),
+    /** Horas de anticipación para que un aviso devuelva un crédito. */
+    cancelNoticeHours: integer("cancel_notice_hours").notNull().default(12),
+    /** Avisos con crédito permitidos en el mes de la clase. */
+    maxCancelsPerMonth: integer("max_cancels_per_month").notNull().default(4),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -125,6 +130,8 @@ export const studioMemberships = pgTable(
     userId: text("user_id").notNull(),
     role: text("role").$type<StudioMemberRole>().notNull(),
     sessionsPerWeek: integer("sessions_per_week"),
+    /** fixed: solo cancela. week: recupera esa semana. month: cualquier día del mes. */
+    turnPlan: text("turn_plan").$type<TurnPlan>().notNull().default("month"),
     assignedTeacherUserId: text("assigned_teacher_user_id"),
     displayName: text("display_name").notNull().default(""),
     phone: text("phone").notNull().default(""),
@@ -261,6 +268,40 @@ export const studioPayments = pgTable(
   ]
 );
 
+/** Clase concreta de un mes, generada desde el horario fijo semanal. */
+export const studioMonthTurns = pgTable(
+  "studio_month_turns",
+  {
+    id: text("id").primaryKey(),
+    studioId: text("studio_id").notNull(),
+    clientUserId: text("client_user_id").notNull(),
+    occursOn: text("occurs_on").notNull(),
+    weekday: integer("weekday").notNull(),
+    slotStart: text("slot_start").notNull(),
+    teacherUserId: text("teacher_user_id"),
+    /** fixed: sale del horario semanal. recovery queda para cuando exista el crédito. */
+    source: text("source").$type<"fixed" | "recovery">().notNull().default("fixed"),
+    /** absent: el alumno ya avisó que no va ese día. */
+    status: text("status")
+      .$type<"scheduled" | "absent">()
+      .notNull()
+      .default("scheduled"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("studio_month_turns_client_slot").on(
+      table.studioId,
+      table.clientUserId,
+      table.occursOn,
+      table.slotStart
+    ),
+    index("studio_month_turns_studio_day_idx").on(table.studioId, table.occursOn),
+    index("studio_month_turns_client_idx").on(table.clientUserId),
+  ]
+);
+
 export type ShiftRequestStatus = "pending" | "approved" | "rejected";
 
 export type ProposedTeacherShift = {
@@ -280,6 +321,11 @@ export const studioAbsences = pgTable(
     absentOn: text("absent_on").notNull(),
     weekday: integer("weekday").notNull(),
     slotStart: text("slot_start").notNull(),
+    /** credit: avisó a tiempo y dentro del tope. notice: avisó tarde o sin crédito. */
+    outcome: text("outcome")
+      .$type<"credit" | "notice">()
+      .notNull()
+      .default("notice"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -291,6 +337,36 @@ export const studioAbsences = pgTable(
       table.absentOn
     ),
     index("studio_absences_studio_day_idx").on(table.studioId, table.absentOn),
+  ]
+);
+
+/** Lista de espera de un horario lleno. El orden es el de createdAt. */
+export const studioWaitlist = pgTable(
+  "studio_waitlist",
+  {
+    id: text("id").primaryKey(),
+    studioId: text("studio_id").notNull(),
+    clientUserId: text("client_user_id").notNull(),
+    occursOn: text("occurs_on").notNull(),
+    weekday: integer("weekday").notNull(),
+    slotStart: text("slot_start").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("studio_waitlist_client_slot").on(
+      table.studioId,
+      table.clientUserId,
+      table.occursOn,
+      table.slotStart
+    ),
+    index("studio_waitlist_slot_idx").on(
+      table.studioId,
+      table.occursOn,
+      table.slotStart,
+      table.createdAt
+    ),
   ]
 );
 

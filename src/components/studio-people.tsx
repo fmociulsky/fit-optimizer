@@ -554,6 +554,7 @@ function StudioClientsCard({
       emergencyPhone: person.emergencyPhone,
       activities: person.activities,
       sessionsPerWeek: person.sessionsPerWeek,
+      turnPlan: person.turnPlan,
       assignedTeacherUserId: person.assignedTeacherUserId,
       picks: bookings.map((item) => ({
         weekday: item.weekday,
@@ -753,6 +754,12 @@ function StudioClientsCard({
                         : person.sessionsPerWeek === 1
                           ? "1 día por semana"
                           : `${person.sessionsPerWeek} días por semana`}
+                      {" · "}
+                      {person.turnPlan === "fixed"
+                        ? "Días fijos"
+                        : person.turnPlan === "week"
+                          ? "Recupera en la semana"
+                          : "Recupera en el mes"}
                     </p>
                     {bookings.length > 0 ? (
                       <ul className="mt-2 space-y-1.5">

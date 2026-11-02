@@ -158,3 +158,31 @@ export function nextHourSlot(now = new Date()) {
   }
   return { weekday, slotStart: formatHour(hours * 60) };
 }
+
+/** La clase de una hora que está en curso: de HH:00 a la hora siguiente. */
+export function isCurrentClassSlot(ymd: string, slot: string, now = new Date()) {
+  const today = ymdFromDate(now);
+  if (today !== ymd) return false;
+  const start = parseHour(slot);
+  if (start == null) return false;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  return minutes >= start && minutes < start + 60;
+}
+
+/** El día ya pasó, o es hoy y la hora de la clase ya terminó. */
+export function classSlotPassed(ymd: string, slot: string, now = new Date()) {
+  const today = ymdFromDate(now);
+  if (ymd < today) return true;
+  if (ymd > today) return false;
+  const start = parseHour(slot);
+  if (start == null) return false;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  return minutes >= start + 60;
+}
+
+function ymdFromDate(now: Date) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}

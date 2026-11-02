@@ -5,11 +5,13 @@ import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { weekdayName } from "@/lib/labels";
+import { formatClassDate } from "@/lib/labels";
+import { mondayOfYmd } from "@/lib/client-account";
 import {
   cancelClientAbsenceToday,
   loadClientTodayHome,
   markClientAbsenceToday,
+  setClientAbsence,
   type ClientTodayHome,
 } from "@/lib/studio";
 
@@ -139,18 +141,61 @@ export function ClientDayHome() {
       </h2>
       <p className="mt-2 text-muted-foreground">
         {home.next
-          ? `Próxima: ${weekdayName(home.next.weekday)} a las ${home.next.slotStart}${
-              home.next.teacherName ? ` con ${home.next.teacherName}` : ""
-            }.`
+          ? home.next.absent
+            ? `Avisaste que no vas el ${formatClassDate(home.next.occursOn)} a las ${home.next.slotStart}.`
+            : `Próxima: ${formatClassDate(home.next.occursOn)} a las ${home.next.slotStart}${
+                home.next.teacherName ? ` con ${home.next.teacherName}` : ""
+              }.`
           : "Todavía no elegiste días de asistencia."}
       </p>
-      <Link
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        {home.next ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={pending}
+            onClick={() => {
+              const nextClass = home.next;
+              if (!nextClass) return;
+              const absent = !nextClass.absent;
+              startTransition(() => {
+                void setClientAbsence(nextClass.occursOn, absent)
+                  .then(async (booking) => {
+                    const saved = booking?.monthTurns.find(
+                      (item) =>
+                        item.source === "fixed" &&
+                        item.occursOn === nextClass.occursOn
+                    );
+                    const next = await loadClientTodayHome();
+                    setHome(next);
+                    toast.success(
+                      !absent
+                        ? "Cancelaste el aviso: volvés a figurar en esa clase."
+                        : booking?.turnPlan === "fixed"
+                          ? `Avisaste que no vas el ${formatClassDate(nextClass.occursOn)}. Podés anotarte en otro horario de ese día.`
+                          : saved?.outcome === "credit"
+                            ? `Avisaste a tiempo. Ganaste 1 crédito${booking?.turnPlan === "week" ? " de esa semana" : " de ese mes"}. Te quedan ${booking?.turnPlan === "week" ? (booking.credits.creditsByWeek[mondayOfYmd(nextClass.occursOn)] ?? 0) : (booking?.credits.creditsByMonth[nextClass.occursOn.slice(0, 7)] ?? 0)}.`
+                            : `Avisaste que no vas el ${formatClassDate(nextClass.occursOn)}. El cupo queda libre, sin crédito.`
+                    );
+                  })
+                  .catch((error: unknown) => {
+                    toast.error(errorMessage(error));
+                  });
+              });
+            }}
+          >
+            {home.next.absent ? "Al final sí voy" : "Ese día no voy"}
+          </Button>
+        ) : null}
+        <Link
         href="/turnos"
-        className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+        className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
       >
         <CalendarClock className="size-4" />
         Ver agenda
       </Link>
+      </div>
     </section>
   );
 }

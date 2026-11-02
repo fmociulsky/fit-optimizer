@@ -49,6 +49,8 @@ export function StudioBranchForm({
   const [kinds, setKinds] = useState<StudioKind[]>(["gym"]);
   const [address, setAddress] = useState("");
   const [phone, setPhone] = useState("");
+  const [cancelNoticeHours, setCancelNoticeHours] = useState(12);
+  const [maxCancelsPerMonth, setMaxCancelsPerMonth] = useState(4);
   const [dayHours, setDayHours] = useState<StudioDayHours[]>(defaultDayHours());
   const [gymMachines, setGymMachines] = useState<string[]>([
     ...TYPICAL_GYM_MACHINE_IDS,
@@ -70,6 +72,8 @@ export function StudioBranchForm({
         setKinds(next.studio.kinds);
         setAddress(next.studio.address);
         setPhone(next.studio.phone);
+        setCancelNoticeHours(next.studio.cancelNoticeHours);
+        setMaxCancelsPerMonth(next.studio.maxCancelsPerMonth);
         setDayHours(next.studio.dayHours);
         setGymMachines(next.studio.gymMachines);
         setPilatesItems(next.studio.pilatesItems);
@@ -130,6 +134,8 @@ export function StudioBranchForm({
         kinds,
         address,
         phone,
+        cancelNoticeHours,
+        maxCancelsPerMonth,
         dayHours,
         gymMachines,
         pilatesItems,
@@ -249,6 +255,42 @@ export function StudioBranchForm({
           />
         </div>
       </div>
+
+      <section>
+        <h2 className="font-heading text-2xl italic">Avisos y créditos</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Si el alumno avisa con esa anticipación, gana un crédito para tomar
+          otro horario de ese mismo mes. Puede cancelar hasta el tope del mes
+          de la clase. Si avisa tarde, el cupo se libera sin crédito y esa vez
+          también cuenta.
+        </p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="notice-hours">Horas de anticipación</Label>
+            <Input
+              id="notice-hours"
+              className="h-11 text-base"
+              inputMode="numeric"
+              value={String(cancelNoticeHours)}
+              onChange={(event) =>
+                setCancelNoticeHours(Number(event.target.value) || 0)
+              }
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="max-cancels">Cancelaciones por mes</Label>
+            <Input
+              id="max-cancels"
+              className="h-11 text-base"
+              inputMode="numeric"
+              value={String(maxCancelsPerMonth)}
+              onChange={(event) =>
+                setMaxCancelsPerMonth(Number(event.target.value) || 0)
+              }
+            />
+          </div>
+        </div>
+      </section>
 
       <section>
         <h2 className="font-heading text-2xl italic">Días y horarios</h2>

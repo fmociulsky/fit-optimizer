@@ -2,19 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  Building2,
-  CalendarOff,
-  GraduationCap,
-  MapPin,
-  Pencil,
-  Phone,
-  Plus,
-  Users,
-} from "lucide-react";
+import { Building2, MapPin, Phone, Plus } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { StudioBranchForm } from "@/components/studio-branch-form";
-import { StudioDayAgenda } from "@/components/studio-day-agenda";
 import { StudioShiftRequestsPanel } from "@/components/studio-shift-requests";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -143,73 +133,47 @@ export function StudioHome() {
 
         <ul className="mt-8 grid gap-4 sm:grid-cols-2">
           {rows.map((row) => (
-            <li
-              key={row.studio.id}
-              className="flex flex-col rounded-3xl border border-foreground/8 bg-card p-5"
-            >
-              <div className="flex items-start gap-3">
-                <Building2 className="mt-0.5 size-5 shrink-0 text-primary" />
-                <div className="min-w-0 flex-1">
-                  <h2 className="font-heading text-2xl italic">{row.studio.name}</h2>
-                  <Badge variant="secondary" className="mt-2">
-                    {studioKindsLabel(row.studio.kinds)}
-                  </Badge>
+            <li key={row.studio.id}>
+              <Link
+                href={`/estudio/${row.studio.id}`}
+                className="flex h-full flex-col rounded-3xl border border-foreground/8 bg-card p-5 transition-colors hover:border-primary/40"
+              >
+                <div className="flex items-start gap-3">
+                  <Building2 className="mt-0.5 size-5 shrink-0 text-primary" />
+                  <div className="min-w-0 flex-1">
+                    <h2 className="font-heading text-2xl italic">
+                      {row.studio.name}
+                    </h2>
+                    <Badge variant="secondary" className="mt-2">
+                      {studioKindsLabel(row.studio.kinds)}
+                    </Badge>
+                  </div>
                 </div>
-              </div>
-              <div className="mt-4 space-y-2 text-sm text-muted-foreground">
-                {row.studio.address ? (
-                  <p className="flex items-start gap-2">
-                    <MapPin className="mt-0.5 size-4 shrink-0" />
-                    {row.studio.address}
+                <div className="mt-4 space-y-2 text-sm text-muted-foreground">
+                  {row.studio.address ? (
+                    <p className="flex items-start gap-2">
+                      <MapPin className="mt-0.5 size-4 shrink-0" />
+                      {row.studio.address}
+                    </p>
+                  ) : null}
+                  {row.studio.phone ? (
+                    <p className="flex items-start gap-2">
+                      <Phone className="mt-0.5 size-4 shrink-0" />
+                      {row.studio.phone}
+                    </p>
+                  ) : null}
+                  <p>{studioHoursSummary(row.studio.dayHours)}</p>
+                  <p>
+                    {row.teacherCount === 1
+                      ? "1 profesor"
+                      : `${row.teacherCount} profesores`}
+                    {" · "}
+                    {row.clientCount === 1
+                      ? "1 alumno"
+                      : `${row.clientCount} alumnos`}
                   </p>
-                ) : null}
-                {row.studio.phone ? (
-                  <p className="flex items-start gap-2">
-                    <Phone className="mt-0.5 size-4 shrink-0" />
-                    {row.studio.phone}
-                  </p>
-                ) : null}
-                <p>{studioHoursSummary(row.studio.dayHours)}</p>
-                <p>
-                  {row.teacherCount} profesor
-                  {row.teacherCount === 1 ? "" : "es"} · {row.clientCount} alumno
-                  {row.clientCount === 1 ? "" : "s"}
-                </p>
-              </div>
-              <div className="mt-5 flex flex-wrap gap-2">
-                <StudioDayAgenda
-                  studioId={row.studio.id}
-                  openWeekdays={row.studio.dayHours.map((day) => day.weekday)}
-                />
-                <Link
-                  href={`/estudio/${row.studio.id}/profesores`}
-                  className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}
-                >
-                  <GraduationCap className="size-4" data-icon="inline-start" />
-                  Profesores
-                </Link>
-                <Link
-                  href={`/estudio/${row.studio.id}/alumnos`}
-                  className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}
-                >
-                  <Users className="size-4" data-icon="inline-start" />
-                  Alumnos
-                </Link>
-                <Link
-                  href={`/estudio/${row.studio.id}/ausencias`}
-                  className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}
-                >
-                  <CalendarOff className="size-4" data-icon="inline-start" />
-                  Ausencias
-                </Link>
-                <Link
-                  href={`/estudio/${row.studio.id}`}
-                  className={cn(buttonVariants({ variant: "outline" }), "h-10 px-3")}
-                >
-                  <Pencil className="size-4" data-icon="inline-start" />
-                  Detalles
-                </Link>
-              </div>
+                </div>
+              </Link>
             </li>
           ))}
         </ul>

@@ -135,7 +135,7 @@ export function StudioAbsencesView({ studioId }: { studioId: string }) {
                             </p>
                           </div>
                           <p className="text-xs font-medium tracking-wide text-amber-800 uppercase dark:text-amber-300">
-                            No va
+                            {item.outcome === "credit" ? "No va · con crédito" : "No va · sin crédito"}
                           </p>
                         </li>
                       ))}

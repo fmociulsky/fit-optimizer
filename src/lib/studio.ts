@@ -1,6 +1,6 @@
 "use server";
 
-import { and, asc, desc, eq, gte, inArray, isNull, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lte, ne } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   accounts,
@@ -9,10 +9,12 @@ import {
   studioAbsences,
   studioInvites,
   studioMemberships,
+  studioMonthTurns,
   studioPayments,
   studioReservations,
   studioShiftRequests,
   studioTeacherShifts,
+  studioWaitlist,
   studios,
   userStates,
   type ProposedTeacherShift,
@@ -27,6 +29,7 @@ import {
   normalizeDayHours,
   occupancyForActivities,
   parseHour,
+  classSlotPassed,
 } from "@/lib/hours";
 import {
   createInviteCode,
@@ -51,10 +54,23 @@ import {
   parseClientBillingPlan,
   renewBillingPeriod,
   serviceEndsFromStart,
+  mondayOfYmd,
   shiftYmd,
   todayBillingYmd,
+  turnGridBounds,
   type ClientAccountAlert,
 } from "@/lib/client-account";
+import {
+  cancellationOutcome,
+  classStart,
+  parseMaxCancels,
+  parseNoticeHours,
+} from "@/lib/credits";
+import {
+  isInMonthTurnWindow,
+  monthTurnBounds,
+  syncFixedMonthTurns,
+} from "@/lib/month-turns";
 import {
   memberActivities,
   normalizeStudioKinds,
@@ -69,6 +85,7 @@ import {
   type StudioInviteRole,
   type StudioKind,
   type StudioMemberRole,
+  type TurnPlan,
 } from "@/lib/types";
 
 export type { ClientAccountAlert };
@@ -81,6 +98,100 @@ async function requireUserId() {
 
 function uid() {
   return crypto.randomUUID();
+}
+
+function monthsBetween(from: string, to: string) {
+  const months: string[] = [];
+  let year = Number(from.slice(0, 4));
+  let month = Number(from.slice(5, 7));
+  const end = to.slice(0, 7);
+  if (!year || !month) return months;
+  while (months.length < 8) {
+    const key = `${year}-${String(month).padStart(2, "0")}`;
+    months.push(key);
+    if (key >= end) break;
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return months;
+}
+
+function parseTurnPlan(raw: unknown): TurnPlan {
+  if (raw === "fixed" || raw === "week" || raw === "month") return raw;
+  return "month";
+}
+
+/** Un recupero fuera de la semana o del mes se descuenta de un crédito que sí exista. */
+function settleCreditBuckets(buckets: Record<string, number>) {
+  const keys = Object.keys(buckets).sort();
+  let debt = 0;
+  for (const key of keys) {
+    const value = buckets[key] ?? 0;
+    if (value < 0) {
+      debt += -value;
+      buckets[key] = 0;
+    }
+  }
+  for (const key of keys) {
+    if (debt === 0) break;
+    const value = buckets[key] ?? 0;
+    if (value <= 0) continue;
+    const take = Math.min(value, debt);
+    buckets[key] = value - take;
+    debt -= take;
+  }
+  const last = keys[keys.length - 1];
+  if (debt > 0 && last) {
+    buckets[last] = (buckets[last] ?? 0) - debt;
+  }
+}
+
+function recoveryCreditCount(
+  turnPlan: TurnPlan,
+  credits: { ymd: string; outcome?: "credit" | "notice" }[],
+  spends: { ymd: string }[],
+  today = todayBillingYmd()
+) {
+  if (turnPlan === "fixed") {
+    const absenceDays = [...new Set(credits.map((item) => item.ymd))];
+    const absenceSet = new Set(absenceDays);
+    const freeFuture = absenceDays.filter(
+      (ymd) => ymd > today && !spends.some((spend) => spend.ymd === ymd)
+    );
+    const extraSpends = spends.filter((spend) => !absenceSet.has(spend.ymd)).length;
+    return Math.max(0, freeFuture.length - extraSpends);
+  }
+  const buckets: Record<string, number> = {};
+  const keyOf = (ymd: string) =>
+    turnPlan === "week" ? mondayOfYmd(ymd) : ymd.slice(0, 7);
+  for (const item of credits) {
+    if (item.outcome && item.outcome !== "credit") continue;
+    const key = keyOf(item.ymd);
+    buckets[key] = (buckets[key] ?? 0) + 1;
+  }
+  for (const item of spends) {
+    const key = keyOf(item.ymd);
+    buckets[key] = (buckets[key] ?? 0) - 1;
+  }
+  settleCreditBuckets(buckets);
+  return Object.values(buckets).reduce(
+    (sum, value) => sum + Math.max(0, value),
+    0
+  );
+}
+
+function weeksBetween(from: string, to: string) {
+  const weeks: string[] = [];
+  let cursor = mondayOfYmd(from);
+  const end = mondayOfYmd(to);
+  while (cursor <= end && weeks.length < 12) {
+    weeks.push(cursor);
+    cursor = shiftYmd(cursor, 7);
+  }
+  return weeks;
 }
 
 function toStudio(row: typeof studios.$inferSelect): Studio {
@@ -105,6 +216,8 @@ function toStudio(row: typeof studios.$inferSelect): Studio {
     address: row.address ?? "",
     phone: row.phone ?? "",
     capacityPerSlot: normalizeCupo(row.capacityPerSlot) ?? 8,
+    cancelNoticeHours: parseNoticeHours(row.cancelNoticeHours),
+    maxCancelsPerMonth: parseMaxCancels(row.maxCancelsPerMonth),
   };
 }
 
@@ -506,6 +619,8 @@ export type StudioBranchInput = {
   dayHours: StudioDayHours[];
   pilatesItems?: string[];
   gymMachines?: string[];
+  cancelNoticeHours?: number;
+  maxCancelsPerMonth?: number;
 };
 
 function stringIds(raw: unknown) {
@@ -532,6 +647,8 @@ function parseBranchInput(input: StudioBranchInput) {
     dayHours,
     pilatesItems: kinds.includes("pilates") ? stringIds(input.pilatesItems) : [],
     gymMachines: kinds.includes("gym") ? stringIds(input.gymMachines) : [],
+    cancelNoticeHours: parseNoticeHours(input.cancelNoticeHours),
+    maxCancelsPerMonth: parseMaxCancels(input.maxCancelsPerMonth),
   };
 }
 
@@ -585,6 +702,8 @@ export type NextHourPerson = {
   phone: string;
   /** Avisó que no asiste ese día (el cupo queda libre). */
   absent?: boolean;
+  /** Plan de turnos del alumno. */
+  turnPlan?: TurnPlan;
 };
 
 export type NextHourTeacherGroup = NextHourPerson & {
@@ -595,6 +714,12 @@ export type DayAgendaSlot = {
   slotStart: string;
   teachers: NextHourTeacherGroup[];
   unassignedStudents: NextHourPerson[];
+  /** Lugares libres para las actividades de la sucursal. */
+  free?: number;
+  /** Ocupación visible, por ejemplo "Ocupación: 2 / 4". */
+  occupancy?: string;
+  /** Alumnos en lista de espera, en el orden en que se anotaron. */
+  waiting?: NextHourPerson[];
 };
 
 export type DayAgenda = {
@@ -614,6 +739,8 @@ function personFromMember(
     userId,
     name: member?.displayName || fallback,
     phone: member?.phone ?? "",
+    turnPlan:
+      member?.role === "client" ? parseTurnPlan(member.turnPlan) : undefined,
   };
 }
 
@@ -622,8 +749,12 @@ function attendanceForSlot(input: {
   slotStart: string;
   members: Map<string, (typeof studioMemberships.$inferSelect)>;
   shifts: (typeof studioTeacherShifts.$inferSelect)[];
-  reservations: (typeof studioReservations.$inferSelect)[];
-  absentClientIds: Set<string>;
+  rows: {
+    clientUserId: string;
+    teacherUserId: string | null;
+    slotStart: string;
+    absent: boolean;
+  }[];
 }): Omit<DayAgendaSlot, "slotStart"> {
   const teacherIds = new Set<string>();
   for (const shift of input.shifts) {
@@ -634,18 +765,16 @@ function attendanceForSlot(input: {
       teacherIds.add(shift.teacherUserId);
     }
   }
-  const slotReservations = input.reservations.filter(
-    (item) => item.slotStart === input.slotStart
-  );
-  for (const row of slotReservations) {
+  const slotRows = input.rows.filter((item) => item.slotStart === input.slotStart);
+  for (const row of slotRows) {
     if (row.teacherUserId) teacherIds.add(row.teacherUserId);
   }
   const studentsByTeacher = new Map<string, NextHourPerson[]>();
   const unassignedStudents: NextHourPerson[] = [];
-  for (const row of slotReservations) {
+  for (const row of slotRows) {
     const student: NextHourPerson = {
       ...personFromMember(row.clientUserId, input.members, "Alumno"),
-      absent: input.absentClientIds.has(row.clientUserId),
+      absent: row.absent,
     };
     if (!row.teacherUserId) {
       unassignedStudents.push(student);
@@ -686,8 +815,377 @@ export async function loadDayAgenda(
     dateYmd && /^\d{4}-\d{2}-\d{2}$/.test(dateYmd.trim())
       ? dateYmd.trim()
       : "";
+  const useMonthTurns = Boolean(absentOn) && isInMonthTurnWindow(absentOn);
+  if (useMonthTurns) {
+    await syncFixedMonthTurns(studio.id);
+    await fillWaitlist(studio.id);
+  }
   const db = getDb();
-  const [members, shifts, reservations, absences] = await Promise.all([
+  const [members, shifts, reservations, absences, turns] = await Promise.all([
+    db
+      .select()
+      .from(studioMemberships)
+      .where(eq(studioMemberships.studioId, studio.id)),
+    db
+      .select()
+      .from(studioTeacherShifts)
+      .where(eq(studioTeacherShifts.studioId, studio.id)),
+    useMonthTurns
+      ? Promise.resolve([] as (typeof studioReservations.$inferSelect)[])
+      : db
+          .select()
+          .from(studioReservations)
+          .where(
+            and(
+              eq(studioReservations.studioId, studio.id),
+              eq(studioReservations.weekday, day)
+            )
+          ),
+    useMonthTurns || !absentOn
+      ? Promise.resolve([] as { clientUserId: string }[])
+      : db
+          .select({ clientUserId: studioAbsences.clientUserId })
+          .from(studioAbsences)
+          .where(
+            and(
+              eq(studioAbsences.studioId, studio.id),
+              eq(studioAbsences.absentOn, absentOn)
+            )
+          ),
+    useMonthTurns
+      ? db
+          .select()
+          .from(studioMonthTurns)
+          .where(
+            and(
+              eq(studioMonthTurns.studioId, studio.id),
+              eq(studioMonthTurns.occursOn, absentOn)
+            )
+          )
+      : Promise.resolve([] as (typeof studioMonthTurns.$inferSelect)[]),
+  ]);
+  const memberById = new Map(members.map((item) => [item.userId, item]));
+  const absentClientIds = new Set(absences.map((item) => item.clientUserId));
+  const rows = useMonthTurns
+    ? turns.map((item) => ({
+        clientUserId: item.clientUserId,
+        teacherUserId: item.teacherUserId,
+        slotStart: item.slotStart,
+        absent: item.status === "absent",
+      }))
+    : reservations.map((item) => ({
+        clientUserId: item.clientUserId,
+        teacherUserId: item.teacherUserId,
+        slotStart: item.slotStart,
+        absent: absentClientIds.has(item.clientUserId),
+      }));
+  const slots = hours
+    ? hourSlots(hours.openFrom, hours.openTo).map((slotStart) => ({
+        slotStart,
+        ...attendanceForSlot({
+          weekday: day,
+          slotStart,
+          members: memberById,
+          shifts,
+          rows,
+        }),
+      }))
+    : [];
+  return {
+    weekday: day,
+    openFrom: hours?.openFrom ?? null,
+    openTo: hours?.openTo ?? null,
+    slots,
+  };
+}
+
+export type WeekAgendaDay = {
+  occursOn: string;
+  weekday: number;
+  slots: DayAgendaSlot[];
+};
+
+export type RecoverableStudent = {
+  userId: string;
+  name: string;
+  turnPlan: TurnPlan;
+  credits: number;
+};
+
+function roomForRows(
+  studio: Studio,
+  hours: StudioDayHours,
+  rows: { clientUserId: string; absent: boolean }[],
+  activitiesByClient: Map<string, StudioKind[]>
+) {
+  let gymTaken = 0;
+  let pilatesTaken = 0;
+  for (const row of rows) {
+    if (row.absent) continue;
+    const activities =
+      activitiesByClient.get(row.clientUserId) ?? studio.kinds;
+    if (activities.includes("gym")) gymTaken += 1;
+    if (activities.includes("pilates")) pilatesTaken += 1;
+  }
+  const parts: { taken: number; capacity: number }[] = [];
+  if (studioHasKind(studio.kinds, "gym")) {
+    parts.push({ taken: gymTaken, capacity: dayKindCapacity(hours, "gym") });
+  }
+  if (studioHasKind(studio.kinds, "pilates")) {
+    parts.push({
+      taken: pilatesTaken,
+      capacity: dayKindCapacity(hours, "pilates"),
+    });
+  }
+  const free =
+    parts.length === 0
+      ? 0
+      : Math.min(
+          ...parts.map((part) => Math.max(0, part.capacity - part.taken))
+        );
+  return {
+    free,
+    occupancy: occupancyText(parts),
+  };
+}
+
+function occupancyText(parts: { taken: number; capacity: number }[]) {
+  return `Ocupación: ${parts
+    .map((part) => `${part.taken} / ${part.capacity}`)
+    .join(" · ")}`;
+}
+
+async function releaseExpiredWaitlist(studioId: string) {
+  await getDb()
+    .delete(studioWaitlist)
+    .where(
+      and(
+        eq(studioWaitlist.studioId, studioId),
+        lte(studioWaitlist.occursOn, todayBillingYmd())
+      )
+    );
+}
+
+/**
+ * Si hay lugar, asigna el turno al primero de la lista que pueda tomarlo.
+ * Quien no entra por su actividad sigue en la fila.
+ */
+export async function fillWaitlist(
+  studioId: string,
+  only?: { occursOn: string; slotStart: string }
+) {
+  const today = todayBillingYmd();
+  const db = getDb();
+  await releaseExpiredWaitlist(studioId);
+  const filters = [
+    eq(studioWaitlist.studioId, studioId),
+    gt(studioWaitlist.occursOn, today),
+  ];
+  if (only) {
+    filters.push(eq(studioWaitlist.occursOn, only.occursOn));
+    filters.push(eq(studioWaitlist.slotStart, only.slotStart));
+  }
+  const queued = await db
+    .select()
+    .from(studioWaitlist)
+    .where(and(...filters))
+    .orderBy(asc(studioWaitlist.createdAt));
+  if (!queued.length) return;
+
+  const [studioRow] = await db
+    .select()
+    .from(studios)
+    .where(eq(studios.id, studioId))
+    .limit(1);
+  if (!studioRow) return;
+  const studio = toStudio(studioRow);
+  const [shifts, members] = await Promise.all([
+    db
+      .select()
+      .from(studioTeacherShifts)
+      .where(eq(studioTeacherShifts.studioId, studioId)),
+    db
+      .select()
+      .from(studioMemberships)
+      .where(eq(studioMemberships.studioId, studioId)),
+  ]);
+  const memberById = new Map(members.map((item) => [item.userId, item]));
+  const activitiesByClient = new Map(
+    members
+      .filter((item) => item.role === "client")
+      .map(
+        (item) =>
+          [item.userId, memberActivities(item.activities, studio.kinds)] as const
+      )
+  );
+  const slots = new Map<string, (typeof queued)[number][]>();
+  for (const entry of queued) {
+    const key = `${entry.occursOn}|${entry.slotStart}`;
+    const list = slots.get(key) ?? [];
+    list.push(entry);
+    slots.set(key, list);
+  }
+
+  for (const [key, entries] of slots) {
+    const [occursOn, slotStart] = key.split("|");
+    const weekday = new Date(`${occursOn}T12:00:00`).getDay();
+    const hours = hoursForWeekday(studio.dayHours, weekday);
+    if (!hours) continue;
+    const covering = shifts.filter(
+      (shift) =>
+        shift.weekday === weekday &&
+        hourCovers(shift.startHour, shift.endHour, slotStart)
+    );
+    if (!covering.length) continue;
+    const gymCapacity = studioHasKind(studio.kinds, "gym")
+      ? dayKindCapacity(hours, "gym")
+      : 0;
+    const pilatesCapacity = studioHasKind(studio.kinds, "pilates")
+      ? dayKindCapacity(hours, "pilates")
+      : 0;
+
+    for (const entry of entries) {
+      const member = memberById.get(entry.clientUserId);
+      if (!member || member.role !== "client") {
+        await db
+          .delete(studioWaitlist)
+          .where(eq(studioWaitlist.id, entry.id));
+        continue;
+      }
+      if (parseTurnPlan(member.turnPlan) === "fixed") {
+        const [moved] = await db
+          .select({ id: studioMonthTurns.id })
+          .from(studioMonthTurns)
+          .where(
+            and(
+              eq(studioMonthTurns.studioId, studioId),
+              eq(studioMonthTurns.clientUserId, entry.clientUserId),
+              eq(studioMonthTurns.occursOn, occursOn),
+              eq(studioMonthTurns.source, "recovery"),
+              eq(studioMonthTurns.status, "scheduled")
+            )
+          )
+          .limit(1);
+        if (moved) {
+          await db
+            .delete(studioWaitlist)
+            .where(eq(studioWaitlist.id, entry.id));
+          continue;
+        }
+      }
+      const scheduled = await db
+        .select({
+          clientUserId: studioMonthTurns.clientUserId,
+        })
+        .from(studioMonthTurns)
+        .where(
+          and(
+            eq(studioMonthTurns.studioId, studioId),
+            eq(studioMonthTurns.occursOn, occursOn),
+            eq(studioMonthTurns.slotStart, slotStart),
+            eq(studioMonthTurns.status, "scheduled")
+          )
+        );
+      if (scheduled.some((item) => item.clientUserId === entry.clientUserId)) {
+        await db
+          .delete(studioWaitlist)
+          .where(eq(studioWaitlist.id, entry.id));
+        continue;
+      }
+      let gymTaken = 0;
+      let pilatesTaken = 0;
+      for (const turn of scheduled) {
+        const activities =
+          activitiesByClient.get(turn.clientUserId) ?? studio.kinds;
+        if (activities.includes("gym")) gymTaken += 1;
+        if (activities.includes("pilates")) pilatesTaken += 1;
+      }
+      const mine = activitiesByClient.get(entry.clientUserId) ?? studio.kinds;
+      const full = occupancyForActivities(
+        { gymTaken, gymCapacity, pilatesTaken, pilatesCapacity },
+        mine
+      ).full;
+      if (full) continue;
+      const chosen =
+        covering.find(
+          (shift) => shift.teacherUserId === member.assignedTeacherUserId
+        ) ?? covering[0];
+      const [ownTurn] = await db
+        .select({
+          id: studioMonthTurns.id,
+          status: studioMonthTurns.status,
+        })
+        .from(studioMonthTurns)
+        .where(
+          and(
+            eq(studioMonthTurns.studioId, studioId),
+            eq(studioMonthTurns.clientUserId, entry.clientUserId),
+            eq(studioMonthTurns.occursOn, occursOn),
+            eq(studioMonthTurns.slotStart, slotStart)
+          )
+        )
+        .limit(1);
+      if (ownTurn?.status === "scheduled") {
+        await db
+          .delete(studioWaitlist)
+          .where(eq(studioWaitlist.id, entry.id));
+        continue;
+      }
+      if (ownTurn) {
+        await db
+          .update(studioMonthTurns)
+          .set({
+            status: "scheduled",
+            source: "recovery",
+            teacherUserId: chosen.teacherUserId,
+            weekday,
+          })
+          .where(eq(studioMonthTurns.id, ownTurn.id));
+      } else {
+        await db.insert(studioMonthTurns).values({
+          id: uid(),
+          studioId,
+          clientUserId: entry.clientUserId,
+          occursOn,
+          weekday,
+          slotStart,
+          teacherUserId: chosen.teacherUserId,
+          source: "recovery",
+          status: "scheduled",
+        });
+      }
+      if (parseTurnPlan(member.turnPlan) === "fixed") {
+        await db
+          .delete(studioWaitlist)
+          .where(
+            and(
+              eq(studioWaitlist.studioId, studioId),
+              eq(studioWaitlist.clientUserId, entry.clientUserId),
+              eq(studioWaitlist.occursOn, occursOn)
+            )
+          );
+      } else {
+        await db.delete(studioWaitlist).where(eq(studioWaitlist.id, entry.id));
+      }
+    }
+  }
+}
+
+/** Agenda de una semana, de lunes a domingo, con los turnos fechados. */
+export async function loadWeekAgenda(studioId: string, weekStart?: string) {
+  const { studio } = await requireStudioOwner(studioId);
+  const bounds = turnGridBounds();
+  const raw = weekStart?.trim() ?? "";
+  const monday = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? mondayOfYmd(raw)
+    : mondayOfYmd(bounds.today);
+  const sunday = shiftYmd(monday, 6);
+  await syncFixedMonthTurns(studio.id);
+  await fillWaitlist(studio.id);
+  const db = getDb();
+  const today = bounds.today;
+  const [members, shifts, turns, reservations, absences, waitRows, creditAbsences, recoveryTurns, heldWaits] =
+    await Promise.all([
     db
       .select()
       .from(studioMemberships)
@@ -698,46 +1196,503 @@ export async function loadDayAgenda(
       .where(eq(studioTeacherShifts.studioId, studio.id)),
     db
       .select()
-      .from(studioReservations)
+      .from(studioMonthTurns)
       .where(
         and(
-          eq(studioReservations.studioId, studio.id),
-          eq(studioReservations.weekday, day)
+          eq(studioMonthTurns.studioId, studio.id),
+          gte(studioMonthTurns.occursOn, monday),
+          lte(studioMonthTurns.occursOn, sunday)
         )
       ),
-    absentOn
-      ? db
-          .select({ clientUserId: studioAbsences.clientUserId })
-          .from(studioAbsences)
-          .where(
-            and(
-              eq(studioAbsences.studioId, studio.id),
-              eq(studioAbsences.absentOn, absentOn)
-            )
-          )
-      : Promise.resolve([] as { clientUserId: string }[]),
+    db
+      .select()
+      .from(studioReservations)
+      .where(eq(studioReservations.studioId, studio.id)),
+    db
+      .select({
+        clientUserId: studioAbsences.clientUserId,
+        absentOn: studioAbsences.absentOn,
+      })
+      .from(studioAbsences)
+      .where(
+        and(
+          eq(studioAbsences.studioId, studio.id),
+          gte(studioAbsences.absentOn, monday),
+          lte(studioAbsences.absentOn, sunday)
+        )
+      ),
+    db
+      .select({
+        clientUserId: studioWaitlist.clientUserId,
+        occursOn: studioWaitlist.occursOn,
+        slotStart: studioWaitlist.slotStart,
+      })
+      .from(studioWaitlist)
+      .where(
+        and(
+          eq(studioWaitlist.studioId, studio.id),
+          gte(studioWaitlist.occursOn, monday),
+          lte(studioWaitlist.occursOn, sunday)
+        )
+      )
+      .orderBy(asc(studioWaitlist.createdAt)),
+    db
+      .select({
+        clientUserId: studioAbsences.clientUserId,
+        absentOn: studioAbsences.absentOn,
+        outcome: studioAbsences.outcome,
+      })
+      .from(studioAbsences)
+      .where(eq(studioAbsences.studioId, studio.id)),
+    db
+      .select({
+        clientUserId: studioMonthTurns.clientUserId,
+        occursOn: studioMonthTurns.occursOn,
+      })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.source, "recovery"),
+          eq(studioMonthTurns.status, "scheduled")
+        )
+      ),
+    db
+      .select({
+        clientUserId: studioWaitlist.clientUserId,
+        occursOn: studioWaitlist.occursOn,
+      })
+      .from(studioWaitlist)
+      .where(
+        and(
+          eq(studioWaitlist.studioId, studio.id),
+          gt(studioWaitlist.occursOn, today)
+        )
+      ),
   ]);
   const memberById = new Map(members.map((item) => [item.userId, item]));
-  const absentClientIds = new Set(absences.map((item) => item.clientUserId));
-  const slots = hours
-    ? hourSlots(hours.openFrom, hours.openTo).map((slotStart) => ({
-        slotStart,
-        ...attendanceForSlot({
-          weekday: day,
-          slotStart,
-          members: memberById,
-          shifts,
-          reservations,
-          absentClientIds,
-        }),
-      }))
-    : [];
+  const activitiesByClient = new Map(
+    members
+      .filter((item) => item.role === "client")
+      .map(
+        (item) =>
+          [item.userId, memberActivities(item.activities, studio.kinds)] as const
+      )
+  );
+  const days: WeekAgendaDay[] = Array.from({ length: 7 }, (_, index) => {
+    const occursOn = shiftYmd(monday, index);
+    const weekday = new Date(`${occursOn}T12:00:00`).getDay();
+    const hours = hoursForWeekday(studio.dayHours, weekday);
+    const useMonth = isInMonthTurnWindow(occursOn, bounds.today);
+    const absentIds = new Set(
+      absences
+        .filter((item) => item.absentOn === occursOn)
+        .map((item) => item.clientUserId)
+    );
+    const rows = useMonth
+      ? turns
+          .filter((item) => item.occursOn === occursOn)
+          .map((item) => ({
+            clientUserId: item.clientUserId,
+            teacherUserId: item.teacherUserId,
+            slotStart: item.slotStart,
+            absent: item.status === "absent",
+          }))
+      : reservations
+          .filter((item) => item.weekday === weekday)
+          .map((item) => ({
+            clientUserId: item.clientUserId,
+            teacherUserId: item.teacherUserId,
+            slotStart: item.slotStart,
+            absent: absentIds.has(item.clientUserId),
+          }));
+    const slots = hours
+      ? hourSlots(hours.openFrom, hours.openTo).map((slotStart) => {
+          const slotRows = rows.filter((item) => item.slotStart === slotStart);
+          return {
+            slotStart,
+            ...attendanceForSlot({
+              weekday,
+              slotStart,
+              members: memberById,
+              shifts,
+              rows,
+            }),
+            ...roomForRows(studio, hours, slotRows, activitiesByClient),
+            waiting: waitRows
+              .filter(
+                (item) =>
+                  item.occursOn === occursOn && item.slotStart === slotStart
+              )
+              .map((item) =>
+                personFromMember(item.clientUserId, memberById, "Alumno")
+              ),
+          };
+        })
+      : [];
+    return { occursOn, weekday, slots };
+  });
+  const creditsByClient = new Map<
+    string,
+    { ymd: string; outcome: "credit" | "notice" }[]
+  >();
+  const spendsByClient = new Map<string, { ymd: string }[]>();
+  for (const item of creditAbsences) {
+    const list = creditsByClient.get(item.clientUserId) ?? [];
+    list.push({ ymd: item.absentOn, outcome: item.outcome });
+    creditsByClient.set(item.clientUserId, list);
+  }
+  for (const item of [...recoveryTurns, ...heldWaits]) {
+    const list = spendsByClient.get(item.clientUserId) ?? [];
+    list.push({ ymd: item.occursOn });
+    spendsByClient.set(item.clientUserId, list);
+  }
+  const recoverable: RecoverableStudent[] = members
+    .filter((item) => item.role === "client")
+    .map((item) => {
+      const turnPlan = parseTurnPlan(item.turnPlan);
+      return {
+        userId: item.userId,
+        name: item.displayName || "Alumno",
+        turnPlan,
+        credits: recoveryCreditCount(
+          turnPlan,
+          creditsByClient.get(item.userId) ?? [],
+          spendsByClient.get(item.userId) ?? []
+        ),
+      };
+    })
+    .filter((item) => item.credits > 0)
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
   return {
-    weekday: day,
-    openFrom: hours?.openFrom ?? null,
-    openTo: hours?.openTo ?? null,
-    slots,
+    name: studio.name,
+    today: bounds.today,
+    from: mondayOfYmd(bounds.from),
+    to: bounds.to,
+    weekStart: monday,
+    days,
+    recoverable,
   };
+}
+
+/** El estudio anula el turno de un alumno y libera el cupo. */
+export async function annulStudentTurn(
+  studioId: string,
+  clientUserId: string,
+  occursOn: string,
+  slotStart: string
+) {
+  const { studio } = await requireStudioOwner(studioId);
+  const ymd = occursOn.trim();
+  const hour = slotStart.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  if (!/^\d{2}:\d{2}$/.test(hour)) {
+    throw new Error("Ese horario no es válido.");
+  }
+  const today = todayBillingYmd();
+  if (ymd < today) throw new Error("Esa clase ya pasó.");
+  await syncFixedMonthTurns(studio.id, clientUserId);
+  const db = getDb();
+  const [turn] = await db
+    .select()
+    .from(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, studio.id),
+        eq(studioMonthTurns.clientUserId, clientUserId),
+        eq(studioMonthTurns.occursOn, ymd),
+        eq(studioMonthTurns.slotStart, hour),
+        eq(studioMonthTurns.status, "scheduled")
+      )
+    )
+    .limit(1);
+  if (!turn) throw new Error("Ese alumno no tiene turno en ese horario.");
+  if (turn.source === "recovery") {
+    await db
+      .delete(studioMonthTurns)
+      .where(eq(studioMonthTurns.id, turn.id));
+    await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
+    return;
+  }
+  const prior = await db
+    .select({
+      outcome: studioAbsences.outcome,
+      absentOn: studioAbsences.absentOn,
+    })
+    .from(studioAbsences)
+    .where(
+      and(
+        eq(studioAbsences.studioId, studio.id),
+        eq(studioAbsences.clientUserId, clientUserId)
+      )
+    );
+  if (!prior.some((item) => item.absentOn === ymd)) {
+    const usedThisMonth = prior.filter(
+      (item) =>
+        item.outcome === "credit" && item.absentOn.startsWith(ymd.slice(0, 7))
+    ).length;
+    await db.insert(studioAbsences).values({
+      id: uid(),
+      studioId: studio.id,
+      clientUserId,
+      absentOn: ymd,
+      weekday: turn.weekday,
+      slotStart: hour,
+      outcome: cancellationOutcome({
+        classAt: classStart(ymd, hour),
+        now: new Date(),
+        noticeHours: studio.cancelNoticeHours,
+        usedThisMonth,
+        maxPerMonth: studio.maxCancelsPerMonth,
+      }),
+    });
+  }
+  await db
+    .update(studioMonthTurns)
+    .set({ status: "absent" })
+    .where(eq(studioMonthTurns.id, turn.id));
+  await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
+}
+
+/** El estudio saca a un alumno de la lista de espera. El crédito vuelve a quedar libre. */
+export async function removeStudentFromWaitlist(
+  studioId: string,
+  clientUserId: string,
+  occursOn: string,
+  slotStart: string
+) {
+  const { studio } = await requireStudioOwner(studioId);
+  const ymd = occursOn.trim();
+  const hour = slotStart.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  if (!/^\d{2}:\d{2}$/.test(hour)) {
+    throw new Error("Ese horario no es válido.");
+  }
+  const db = getDb();
+  const [row] = await db
+    .select({ id: studioWaitlist.id })
+    .from(studioWaitlist)
+    .where(
+      and(
+        eq(studioWaitlist.studioId, studio.id),
+        eq(studioWaitlist.clientUserId, clientUserId),
+        eq(studioWaitlist.occursOn, ymd),
+        eq(studioWaitlist.slotStart, hour)
+      )
+    )
+    .limit(1);
+  if (!row) throw new Error("Ese alumno no está en la lista de espera.");
+  await db.delete(studioWaitlist).where(eq(studioWaitlist.id, row.id));
+}
+
+/** El estudio anota a un alumno con crédito: en el turno si hay lugar, si no en la espera. */
+export async function enrollStudentWithCredit(
+  studioId: string,
+  clientUserId: string,
+  occursOn: string,
+  slotStart: string
+) {
+  const { studio } = await requireStudioOwner(studioId);
+  const ymd = occursOn.trim();
+  const hour = slotStart.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  if (!/^\d{2}:\d{2}$/.test(hour)) {
+    throw new Error("Ese horario no es válido.");
+  }
+  const today = todayBillingYmd();
+  if (ymd < today) throw new Error("Esa clase ya pasó.");
+  const db = getDb();
+  const [member] = await db
+    .select()
+    .from(studioMemberships)
+    .where(
+      and(
+        eq(studioMemberships.studioId, studio.id),
+        eq(studioMemberships.userId, clientUserId),
+        eq(studioMemberships.role, "client")
+      )
+    )
+    .limit(1);
+  if (!member) throw new Error("Ese alumno no es de esta sucursal.");
+  const [absences, recoveries, waits, existingRows] = await Promise.all([
+    db
+      .select({
+        absentOn: studioAbsences.absentOn,
+        outcome: studioAbsences.outcome,
+      })
+      .from(studioAbsences)
+      .where(
+        and(
+          eq(studioAbsences.studioId, studio.id),
+          eq(studioAbsences.clientUserId, clientUserId)
+        )
+      ),
+    db
+      .select({ occursOn: studioMonthTurns.occursOn })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.clientUserId, clientUserId),
+          eq(studioMonthTurns.source, "recovery"),
+          eq(studioMonthTurns.status, "scheduled")
+        )
+      ),
+    db
+      .select({
+        id: studioWaitlist.id,
+        occursOn: studioWaitlist.occursOn,
+        slotStart: studioWaitlist.slotStart,
+      })
+      .from(studioWaitlist)
+      .where(
+        and(
+          eq(studioWaitlist.studioId, studio.id),
+          eq(studioWaitlist.clientUserId, clientUserId),
+          gt(studioWaitlist.occursOn, today)
+        )
+      ),
+    db
+      .select({
+        id: studioMonthTurns.id,
+        status: studioMonthTurns.status,
+      })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.clientUserId, clientUserId),
+          eq(studioMonthTurns.occursOn, ymd),
+          eq(studioMonthTurns.slotStart, hour)
+        )
+      )
+      .limit(1),
+  ]);
+  const credits = recoveryCreditCount(
+    parseTurnPlan(member.turnPlan),
+    absences.map((item) => ({ ymd: item.absentOn, outcome: item.outcome })),
+    [
+      ...recoveries.map((item) => ({ ymd: item.occursOn })),
+      ...waits.map((item) => ({ ymd: item.occursOn })),
+    ]
+  );
+  if (credits < 1) {
+    throw new Error("Ese alumno no tiene créditos para recuperar.");
+  }
+  const existing = existingRows[0];
+  if (existing?.status === "scheduled") {
+    throw new Error("Ya está anotado en ese horario.");
+  }
+  if (waits.some((item) => item.occursOn === ymd && item.slotStart === hour)) {
+    throw new Error("Ya está en la lista de espera.");
+  }
+  const weekday = new Date(`${ymd}T12:00:00`).getDay();
+  const hours = hoursForWeekday(studio.dayHours, weekday);
+  if (!hours) throw new Error("La sucursal está cerrada ese día.");
+  const [shifts, scheduled] = await Promise.all([
+    db
+      .select()
+      .from(studioTeacherShifts)
+      .where(eq(studioTeacherShifts.studioId, studio.id)),
+    db
+      .select({ clientUserId: studioMonthTurns.clientUserId })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.occursOn, ymd),
+          eq(studioMonthTurns.slotStart, hour),
+          eq(studioMonthTurns.status, "scheduled")
+        )
+      ),
+  ]);
+  const covering = shifts.filter(
+    (shift) =>
+      shift.weekday === weekday &&
+      hourCovers(shift.startHour, shift.endHour, hour)
+  );
+  if (!covering.length) throw new Error("No hay profesor en ese horario.");
+  const people = await db
+    .select({
+      userId: studioMemberships.userId,
+      activities: studioMemberships.activities,
+    })
+    .from(studioMemberships)
+    .where(eq(studioMemberships.studioId, studio.id));
+  const activitiesByClient = new Map(
+    people.map(
+      (item) =>
+        [item.userId, memberActivities(item.activities, studio.kinds)] as const
+    )
+  );
+  let gymTaken = 0;
+  let pilatesTaken = 0;
+  for (const turn of scheduled) {
+    const activities = activitiesByClient.get(turn.clientUserId) ?? studio.kinds;
+    if (activities.includes("gym")) gymTaken += 1;
+    if (activities.includes("pilates")) pilatesTaken += 1;
+  }
+  const mine = activitiesByClient.get(clientUserId) ?? studio.kinds;
+  const full = occupancyForActivities(
+    {
+      gymTaken,
+      gymCapacity: studioHasKind(studio.kinds, "gym")
+        ? dayKindCapacity(hours, "gym")
+        : 0,
+      pilatesTaken,
+      pilatesCapacity: studioHasKind(studio.kinds, "pilates")
+        ? dayKindCapacity(hours, "pilates")
+        : 0,
+    },
+    mine
+  ).full;
+  if (!full) {
+    const chosen =
+      covering.find(
+        (shift) => shift.teacherUserId === member.assignedTeacherUserId
+      ) ?? covering[0];
+    if (!chosen) throw new Error("No hay profesor en ese horario.");
+    if (existing) {
+      await db
+        .update(studioMonthTurns)
+        .set({
+          status: "scheduled",
+          source: "recovery",
+          teacherUserId: chosen.teacherUserId,
+          weekday,
+        })
+        .where(eq(studioMonthTurns.id, existing.id));
+    } else {
+      await db.insert(studioMonthTurns).values({
+        id: uid(),
+        studioId: studio.id,
+        clientUserId,
+        occursOn: ymd,
+        weekday,
+        slotStart: hour,
+        teacherUserId: chosen.teacherUserId,
+        source: "recovery",
+        status: "scheduled",
+      });
+    }
+    await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
+    return;
+  }
+  await db.insert(studioWaitlist).values({
+    id: uid(),
+    studioId: studio.id,
+    clientUserId,
+    occursOn: ymd,
+    weekday,
+    slotStart: hour,
+  });
+  await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
 }
 
 export type OwnedBranchQuota = {
@@ -808,6 +1763,8 @@ export async function createStudioBranch(input: StudioBranchInput) {
     dayHours: parsed.dayHours,
     address: parsed.address,
     phone: parsed.phone,
+    cancelNoticeHours: parsed.cancelNoticeHours,
+    maxCancelsPerMonth: parsed.maxCancelsPerMonth,
     ...mirroredHours(parsed.dayHours),
     createdAt: now,
     updatedAt: now,
@@ -845,6 +1802,8 @@ export async function saveStudioBranch(
       kind: primaryKind(parsed.kinds),
       address: parsed.address,
       phone: parsed.phone,
+      cancelNoticeHours: parsed.cancelNoticeHours,
+      maxCancelsPerMonth: parsed.maxCancelsPerMonth,
       dayHours: parsed.dayHours,
       pilatesItems: parsed.pilatesItems,
       gymMachines: parsed.gymMachines,
@@ -861,6 +1820,9 @@ export async function deleteStudioBranch(studioId: string) {
   await db
     .delete(studioReservations)
     .where(eq(studioReservations.studioId, studio.id));
+  await db
+    .delete(studioMonthTurns)
+    .where(eq(studioMonthTurns.studioId, studio.id));
   await db
     .delete(studioTeacherShifts)
     .where(eq(studioTeacherShifts.studioId, studio.id));
@@ -938,6 +1900,7 @@ export type StudioPerson = {
   activities: StudioKind[];
   role: StudioMemberRole | StudioInviteRole;
   sessionsPerWeek: number | null;
+  turnPlan: TurnPlan;
   assignedTeacherUserId: string | null;
   assignedTeacherName: string | null;
   active: boolean;
@@ -1100,6 +2063,7 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
         activities: memberActivities(item.activities, studio.kinds),
         role: item.role,
         sessionsPerWeek: item.sessionsPerWeek,
+        turnPlan: item.role === "client" ? parseTurnPlan(item.turnPlan) : "month",
         assignedTeacherUserId: item.assignedTeacherUserId ?? null,
         assignedTeacherName: item.assignedTeacherUserId
           ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
@@ -1131,6 +2095,7 @@ async function loadStudioBundle(studio: Studio): Promise<StudioDashboard> {
       activities: memberActivities(null, studio.kinds),
       role: item.role,
       sessionsPerWeek: item.sessionsPerWeek,
+      turnPlan: "month" as TurnPlan,
       assignedTeacherUserId: item.assignedTeacherUserId ?? null,
       assignedTeacherName: item.assignedTeacherUserId
         ? (teacherNameById.get(item.assignedTeacherUserId) ?? null)
@@ -1381,6 +2346,7 @@ export async function createStudioClient(input: {
   birthDate?: string;
   activities: StudioKind[];
   sessionsPerWeek: number;
+  turnPlan: TurnPlan;
   teacherUserId: string;
   picks: { weekday: number; slotStart: string }[];
   billingPlan: ClientBillingPlan;
@@ -1398,6 +2364,7 @@ export async function createStudioClient(input: {
   if (sessionsPerWeek < 1 || sessionsPerWeek > 6) {
     throw new Error("Las veces por semana van de 1 a 6.");
   }
+  const turnPlan = parseTurnPlan(input.turnPlan);
   const billingPlan = parseBillingPlan(input.billingPlan);
   const feeAmount = parseFeeAmount(input.feeAmount);
   if (feeAmount === null || feeAmount <= 0) {
@@ -1433,6 +2400,7 @@ export async function createStudioClient(input: {
     userId,
     role: "client",
     sessionsPerWeek,
+    turnPlan,
     assignedTeacherUserId: teacherUserId,
     displayName,
     phone,
@@ -1474,6 +2442,7 @@ export async function updateStudioClient(input: {
   birthDate?: string;
   activities: StudioKind[];
   sessionsPerWeek: number;
+  turnPlan: TurnPlan;
   teacherUserId: string;
   picks: { weekday: number; slotStart: string }[];
 }) {
@@ -1489,6 +2458,7 @@ export async function updateStudioClient(input: {
   if (sessionsPerWeek < 1 || sessionsPerWeek > 6) {
     throw new Error("Las veces por semana van de 1 a 6.");
   }
+  const turnPlan = parseTurnPlan(input.turnPlan);
   const teacherUserId = await requireStudioTeacher(
     studio.id,
     input.teacherUserId
@@ -1533,6 +2503,7 @@ export async function updateStudioClient(input: {
       birthDate,
       activities,
       sessionsPerWeek,
+      turnPlan,
       assignedTeacherUserId: teacherUserId,
     })
     .where(eq(studioMemberships.id, member.id));
@@ -1607,6 +2578,14 @@ export async function deleteStudioClient(input: {
       )
     );
   await db
+    .delete(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, studio.id),
+        eq(studioMonthTurns.clientUserId, clientUserId)
+      )
+    );
+  await db
     .delete(studioMemberships)
     .where(eq(studioMemberships.id, member.id));
   if (clientUserId !== "demo-client") {
@@ -1643,6 +2622,7 @@ export type GymClientSummary = {
   emergencyPhone: string;
   activities: StudioKind[];
   sessionsPerWeek: number | null;
+  turnPlan: TurnPlan;
   studioId: string;
   studioName: string;
   assignedTeacherUserId: string | null;
@@ -1742,6 +2722,7 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
         branches.find((branch) => branch.id === item.studioId)?.kinds ?? ["gym"]
       ),
       sessionsPerWeek: item.sessionsPerWeek,
+      turnPlan: parseTurnPlan(item.turnPlan),
       studioId: item.studioId,
       studioName: studioNameById.get(item.studioId) ?? "Sucursal",
       assignedTeacherUserId: item.assignedTeacherUserId ?? null,
@@ -3526,6 +4507,182 @@ export async function redeemStudioInvite(rawCode: string) {
   };
 }
 
+export type ClientMonthTurn = {
+  id: string;
+  occursOn: string;
+  weekday: number;
+  slotStart: string;
+  teacherName: string | null;
+  status: "scheduled" | "absent";
+  source: "fixed" | "recovery";
+  outcome: "credit" | "notice" | null;
+};
+
+export type RecoverySlot = {
+  slotStart: string;
+  full: boolean;
+  bookable: boolean;
+  /** Clase propia todavía vigente en ese horario. */
+  mine: boolean;
+  /** Reservado. Un aviso propio no bloquea anotarse ni la lista de espera. */
+  held: boolean;
+  /** El alumno ya está en la lista de espera de ese horario. */
+  waiting: boolean;
+  open: boolean;
+  /** Lugares libres para las actividades del alumno. */
+  free: number;
+  /** Ocupación visible, por ejemplo "5/8". */
+  occupancy: string;
+  /** Profesores que cubren ese horario. */
+  teachers: string;
+};
+
+export type RecoveryDay = {
+  occursOn: string;
+  slots: RecoverySlot[];
+};
+
+export type ClientCreditState = {
+  /** Suma de los créditos que todavía se pueden usar, mes por mes. */
+  balance: number;
+  noticeHours: number;
+  maxPerMonth: number;
+  /** Ausencias del mes en curso, con o sin crédito. */
+  usedThisMonth: number;
+  /** Ausencias de cada mes de la clase, con o sin crédito. */
+  usedByMonth: Record<string, number>;
+  /** Créditos libres de cada mes. No se arrastran al mes siguiente. */
+  creditsByMonth: Record<string, number>;
+  /** Créditos libres de cada semana, con clave el lunes. */
+  creditsByWeek: Record<string, number>;
+  /** Cancelaciones que todavía puede hacer en cada mes de la clase. */
+  cancelsLeftByMonth: Record<string, number>;
+  /** Meses de la agenda, de más viejo a más nuevo. */
+  months: string[];
+  /** Semanas de la agenda, con el lunes de cada una. */
+  weeks: string[];
+  turnPlan: TurnPlan;
+};
+
+function recoveryDaysFor(input: {
+  studio: Studio;
+  shifts: { teacherUserId: string; weekday: number; startHour: string; endHour: string }[];
+  activities: StudioKind[];
+  from: string;
+  to: string;
+  assignedTeacherId?: string | null;
+  teacherNames: Map<string, string>;
+  turns: {
+    clientUserId: string;
+    occursOn: string;
+    slotStart: string;
+    status: string;
+  }[];
+  mine: { occursOn: string; slotStart: string; status: string }[];
+  activitiesByClient: Map<string, StudioKind[]>;
+  waiting: Set<string>;
+}): RecoveryDay[] {
+  const days: RecoveryDay[] = [];
+  let cursor = input.from;
+  while (cursor <= input.to && days.length < 120) {
+    const weekday = new Date(`${cursor}T12:00:00`).getDay();
+    const hours = hoursForWeekday(input.studio.dayHours, weekday);
+    if (hours) {
+      const slots = hourSlots(hours.openFrom, hours.openTo).map((slotStart) => {
+        const covering = input.shifts.some(
+          (shift) =>
+            shift.weekday === weekday &&
+            hourCovers(shift.startHour, shift.endHour, slotStart)
+        );
+        const scheduled = input.turns.filter(
+          (item) =>
+            item.occursOn === cursor &&
+            item.slotStart === slotStart &&
+            item.status === "scheduled"
+        );
+        let gymTaken = 0;
+        let pilatesTaken = 0;
+        for (const item of scheduled) {
+          const activities =
+            input.activitiesByClient.get(item.clientUserId) ?? input.studio.kinds;
+          if (activities.includes("gym")) gymTaken += 1;
+          if (activities.includes("pilates")) pilatesTaken += 1;
+        }
+        const gymCapacity = studioHasKind(input.studio.kinds, "gym")
+          ? dayKindCapacity(hours, "gym")
+          : 0;
+        const pilatesCapacity = studioHasKind(input.studio.kinds, "pilates")
+          ? dayKindCapacity(hours, "pilates")
+          : 0;
+        const counts = occupancyForActivities(
+          { gymTaken, gymCapacity, pilatesTaken, pilatesCapacity },
+          input.activities
+        );
+        const parts: { taken: number; capacity: number }[] = [];
+        if (input.activities.includes("gym")) {
+          parts.push({ taken: gymTaken, capacity: gymCapacity });
+        }
+        if (input.activities.includes("pilates")) {
+          parts.push({ taken: pilatesTaken, capacity: pilatesCapacity });
+        }
+        const free =
+          parts.length === 0
+            ? 0
+            : Math.min(
+                ...parts.map((part) =>
+                  Math.max(0, part.capacity - part.taken)
+                )
+              );
+        const teacherIds = [
+          ...new Set(
+            input.shifts
+              .filter(
+                (shift) =>
+                  shift.weekday === weekday &&
+                  hourCovers(shift.startHour, shift.endHour, slotStart)
+              )
+              .map((shift) => shift.teacherUserId)
+          ),
+        ].sort((a, b) => {
+          if (input.assignedTeacherId) {
+            if (a === input.assignedTeacherId) return -1;
+            if (b === input.assignedTeacherId) return 1;
+          }
+          return (input.teacherNames.get(a) ?? "").localeCompare(
+            input.teacherNames.get(b) ?? "",
+            "es"
+          );
+        });
+        const own = input.mine.filter(
+          (item) => item.occursOn === cursor && item.slotStart === slotStart
+        );
+        const mine = own.some((item) => item.status === "scheduled");
+        const held = false;
+        return {
+          slotStart,
+          full: counts.full,
+          mine,
+          held,
+          waiting: input.waiting.has(`${cursor}|${slotStart}`),
+          open: covering,
+          bookable: covering && !counts.full && !held,
+          free,
+          occupancy: occupancyText(parts),
+          teachers: teacherIds
+            .map((id) => input.teacherNames.get(id))
+            .filter((name): name is string => Boolean(name))
+            .join(" · "),
+        };
+      });
+      if (slots.some((item) => item.bookable || item.full || item.mine || item.waiting)) {
+        days.push({ occursOn: cursor, slots });
+      }
+    }
+    cursor = shiftYmd(cursor, 1);
+  }
+  return days;
+}
+
 export async function loadClientBooking() {
   const userId = await requireUserId();
   const member = await membershipFor(userId, "client");
@@ -3544,17 +4701,213 @@ export async function loadClientBooking() {
         (item) => item.role === "teacher" && item.userId === teacherId
       )
     : null;
+  await syncFixedMonthTurns(studio.id, userId);
+  await fillWaitlist(studio.id);
+  const { from, to } = monthTurnBounds();
+  const db = getDb();
+  const [turnRows, absenceRows, studioTurns, recoveryRows, waitRows] = await Promise.all([
+    db
+      .select()
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.clientUserId, userId),
+          gte(studioMonthTurns.occursOn, from),
+          lte(studioMonthTurns.occursOn, to)
+        )
+      )
+      .orderBy(asc(studioMonthTurns.occursOn), asc(studioMonthTurns.slotStart)),
+    db
+      .select()
+      .from(studioAbsences)
+      .where(
+        and(
+          eq(studioAbsences.studioId, studio.id),
+          eq(studioAbsences.clientUserId, userId)
+        )
+      ),
+    db
+      .select({
+        clientUserId: studioMonthTurns.clientUserId,
+        occursOn: studioMonthTurns.occursOn,
+        slotStart: studioMonthTurns.slotStart,
+        status: studioMonthTurns.status,
+      })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          gte(studioMonthTurns.occursOn, from),
+          lte(studioMonthTurns.occursOn, to)
+        )
+      ),
+    db
+      .select({ occursOn: studioMonthTurns.occursOn })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studio.id),
+          eq(studioMonthTurns.clientUserId, userId),
+          eq(studioMonthTurns.source, "recovery")
+        )
+      ),
+    db
+      .select({
+        occursOn: studioWaitlist.occursOn,
+        slotStart: studioWaitlist.slotStart,
+      })
+      .from(studioWaitlist)
+      .where(
+        and(
+          eq(studioWaitlist.studioId, studio.id),
+          eq(studioWaitlist.clientUserId, userId),
+          gt(studioWaitlist.occursOn, todayBillingYmd())
+        )
+      ),
+  ]);
+  const nameById = new Map(
+    bundle.people.flatMap((item) =>
+      item.userId ? [[item.userId, item.displayName] as const] : []
+    )
+  );
+  const teacherName = teacher?.displayName ?? null;
+  const activities = memberActivities(member.activities, studio.kinds);
+  const today = todayBillingYmd();
+  const outcomeByDay = new Map(
+    absenceRows.map((item) => [item.absentOn, item.outcome] as const)
+  );
+  const creditAbsences = absenceRows.filter((item) => item.outcome === "credit");
+  const months = monthsBetween(from, to);
+  const creditsByMonth: Record<string, number> = {};
+  const usedByMonth: Record<string, number> = {};
+  const cancelsLeftByMonth: Record<string, number> = {};
+  for (const month of months) {
+    creditsByMonth[month] = 0;
+    usedByMonth[month] = 0;
+    cancelsLeftByMonth[month] = studio.maxCancelsPerMonth;
+  }
+  for (const item of creditAbsences) {
+    const month = item.absentOn.slice(0, 7);
+    creditsByMonth[month] = (creditsByMonth[month] ?? 0) + 1;
+  }
+  for (const item of recoveryRows) {
+    const month = item.occursOn.slice(0, 7);
+    creditsByMonth[month] = (creditsByMonth[month] ?? 0) - 1;
+  }
+  for (const item of waitRows) {
+    const month = item.occursOn.slice(0, 7);
+    creditsByMonth[month] = (creditsByMonth[month] ?? 0) - 1;
+  }
+  for (const item of absenceRows) {
+    const month = item.absentOn.slice(0, 7);
+    usedByMonth[month] = (usedByMonth[month] ?? 0) + 1;
+  }
+  for (const month of new Set([...months, ...Object.keys(usedByMonth)])) {
+    cancelsLeftByMonth[month] = Math.max(
+      0,
+      studio.maxCancelsPerMonth - (usedByMonth[month] ?? 0)
+    );
+  }
+  const usedThisMonth = usedByMonth[today.slice(0, 7)] ?? 0;
+  const turnPlan = parseTurnPlan(member.turnPlan);
+  const weeks = weeksBetween(from, to);
+  const creditsByWeek: Record<string, number> = {};
+  for (const week of weeks) creditsByWeek[week] = 0;
+  if (turnPlan === "week") {
+    for (const item of creditAbsences) {
+      const week = mondayOfYmd(item.absentOn);
+      creditsByWeek[week] = (creditsByWeek[week] ?? 0) + 1;
+    }
+    for (const item of recoveryRows) {
+      const week = mondayOfYmd(item.occursOn);
+      creditsByWeek[week] = (creditsByWeek[week] ?? 0) - 1;
+    }
+    for (const item of waitRows) {
+      const week = mondayOfYmd(item.occursOn);
+      creditsByWeek[week] = (creditsByWeek[week] ?? 0) - 1;
+    }
+    settleCreditBuckets(creditsByWeek);
+  } else if (turnPlan === "month") {
+    settleCreditBuckets(creditsByMonth);
+  }
+  const balance =
+    turnPlan === "fixed"
+      ? 0
+      : turnPlan === "week"
+        ? Object.values(creditsByWeek).reduce(
+            (sum, value) => sum + Math.max(0, value),
+            0
+          )
+        : Object.values(creditsByMonth).reduce(
+            (sum, value) => sum + Math.max(0, value),
+            0
+          );
+  const activitiesByClient = new Map(
+    bundle.people.flatMap((item) =>
+      item.role === "client" && item.userId
+        ? [[item.userId, item.activities] as const]
+        : []
+    )
+  );
   return {
     studio: bundle.studio,
     sessionsPerWeek: member.sessionsPerWeek ?? 1,
-    activities: memberActivities(member.activities, studio.kinds),
+    turnPlan,
+    activities,
     teacher: teacher
       ? { userId: teacher.userId as string, name: teacher.displayName }
       : teacherId
         ? { userId: teacherId, name: "Profesor" }
         : null,
     occupancy: bundle.occupancy,
+    today,
+    credits: {
+      balance,
+      noticeHours: studio.cancelNoticeHours,
+      maxPerMonth: studio.maxCancelsPerMonth,
+      usedThisMonth,
+      usedByMonth,
+      creditsByMonth,
+      creditsByWeek,
+      cancelsLeftByMonth,
+      months,
+      weeks,
+      turnPlan,
+    } satisfies ClientCreditState,
+    recoveryDays: recoveryDaysFor({
+      studio,
+      shifts: bundle.shifts,
+      activities,
+      from,
+      to,
+      assignedTeacherId: teacher?.userId ?? teacherId,
+      teacherNames: nameById,
+      turns: studioTurns,
+      mine: turnRows.map((item) => ({
+        occursOn: item.occursOn,
+        slotStart: item.slotStart,
+        status: item.status,
+      })),
+      activitiesByClient,
+      waiting: new Set(
+        waitRows.map((item) => `${item.occursOn}|${item.slotStart}`)
+      ),
+    }),
     mine: bundle.reservations.filter((item) => item.clientUserId === userId),
+    monthTurns: turnRows.map((item) => ({
+      id: item.id,
+      occursOn: item.occursOn,
+      weekday: item.weekday,
+      slotStart: item.slotStart,
+      teacherName: item.teacherUserId
+        ? (nameById.get(item.teacherUserId) ?? teacherName)
+        : teacherName,
+      status: item.status,
+      source: item.source,
+      outcome:
+        item.source === "fixed" ? (outcomeByDay.get(item.occursOn) ?? null) : null,
+    })),
   };
 }
 
@@ -3566,136 +4919,480 @@ export type ClientTodayHome = {
     absent: boolean;
   } | null;
   next: {
+    occursOn: string;
     weekday: number;
     slotStart: string;
     teacherName: string | null;
+    absent: boolean;
   } | null;
 };
+
+function todayHomeFromBooking(
+  booking: NonNullable<Awaited<ReturnType<typeof loadClientBooking>>>
+): ClientTodayHome {
+  const todayYmd = booking.today;
+  const now = new Date();
+  const upcoming = [...booking.monthTurns]
+    .filter((item) => !classSlotPassed(item.occursOn, item.slotStart, now))
+    .sort(
+      (a, b) =>
+        a.occursOn.localeCompare(b.occursOn) ||
+        a.slotStart.localeCompare(b.slotStart)
+    );
+  const nextTurn = upcoming[0] ?? null;
+  const todayTurn = nextTurn?.occursOn === todayYmd ? nextTurn : null;
+  const laterTurn = todayTurn ? null : nextTurn;
+  return {
+    studioName: booking.studio.name,
+    today: todayTurn
+      ? {
+          slotStart: todayTurn.slotStart,
+          teacherName: todayTurn.teacherName,
+          absent: todayTurn.status === "absent",
+        }
+      : null,
+    next: laterTurn
+      ? {
+          occursOn: laterTurn.occursOn,
+          weekday: laterTurn.weekday,
+          slotStart: laterTurn.slotStart,
+          teacherName: laterTurn.teacherName,
+          absent: laterTurn.status === "absent",
+        }
+      : null,
+  };
+}
 
 /** Resumen del día para el home del alumno de gimnasio. */
 export async function loadClientTodayHome(): Promise<ClientTodayHome | null> {
   const booking = await loadClientBooking();
   if (!booking) return null;
-  const userId = await requireUserId();
-  const teacherNameById = new Map<string, string>();
-  if (booking.teacher) {
-    teacherNameById.set(booking.teacher.userId, booking.teacher.name);
-  }
-  for (const row of booking.mine) {
-    if (row.teacherUserId && row.teacherName) {
-      teacherNameById.set(row.teacherUserId, row.teacherName);
-    }
-  }
-  const resolveTeacher = (teacherUserId: string | null) => {
-    if (teacherUserId && teacherNameById.has(teacherUserId)) {
-      return teacherNameById.get(teacherUserId) ?? null;
-    }
-    return booking.teacher?.name ?? null;
-  };
-  const todayYmd = todayBillingYmd();
-  const todayWeekday = new Date(`${todayYmd}T12:00:00`).getDay();
-  const todayRows = booking.mine
-    .filter((item) => item.weekday === todayWeekday)
-    .sort((a, b) => a.slotStart.localeCompare(b.slotStart));
-  const [absence] = todayRows[0]
-    ? await getDb()
-        .select({ id: studioAbsences.id })
-        .from(studioAbsences)
-        .where(
-          and(
-            eq(studioAbsences.studioId, booking.studio.id),
-            eq(studioAbsences.clientUserId, userId),
-            eq(studioAbsences.absentOn, todayYmd)
-          )
-        )
-        .limit(1)
-    : [null];
-  const today = todayRows[0]
-    ? {
-        slotStart: todayRows[0].slotStart,
-        teacherName: resolveTeacher(todayRows[0].teacherUserId),
-        absent: Boolean(absence),
-      }
-    : null;
-
-  let next: ClientTodayHome["next"] = null;
-  if (!today) {
-    const upcoming = [...booking.mine].sort((a, b) => {
-      const aDelta = (a.weekday - todayWeekday + 7) % 7 || 7;
-      const bDelta = (b.weekday - todayWeekday + 7) % 7 || 7;
-      return aDelta - bDelta || a.slotStart.localeCompare(b.slotStart);
-    });
-    const row = upcoming[0];
-    if (row) {
-      next = {
-        weekday: row.weekday,
-        slotStart: row.slotStart,
-        teacherName: resolveTeacher(row.teacherUserId),
-      };
-    }
-  }
-
-  return {
-    studioName: booking.studio.name,
-    today,
-    next,
-  };
+  return todayHomeFromBooking(booking);
 }
 
-/** El alumno avisa que hoy no asiste y libera el cupo de ese día. */
-export async function markClientAbsenceToday() {
+/**
+ * El alumno avisa, o retira el aviso, de una clase de hoy o de un día que
+ * todavía no llegó. La clase ya pasada no se puede avisar.
+ */
+export async function setClientAbsence(occursOn: string, absent: boolean) {
+  const ymd = occursOn.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
   const booking = await loadClientBooking();
   if (!booking) throw new Error("No hay un gimnasio vinculado.");
-  const userId = await requireUserId();
-  const todayYmd = todayBillingYmd();
-  const todayWeekday = new Date(`${todayYmd}T12:00:00`).getDay();
-  const todayRow = booking.mine
-    .filter((item) => item.weekday === todayWeekday)
-    .sort((a, b) => a.slotStart.localeCompare(b.slotStart))[0];
-  if (!todayRow) {
-    throw new Error("Hoy no tenés clase para avisar.");
+  if (ymd < booking.today) throw new Error("Esa clase ya pasó.");
+  const turn = booking.monthTurns.find(
+    (item) => item.source === "fixed" && item.occursOn === ymd
+  );
+  if (!turn) throw new Error("Ese día no tenés una clase fija.");
+  if (classSlotPassed(ymd, turn.slotStart)) {
+    throw new Error("Esa clase ya pasó.");
   }
+  const userId = await requireUserId();
   const db = getDb();
-  const [existing] = await db
-    .select({ id: studioAbsences.id })
-    .from(studioAbsences)
-    .where(
-      and(
-        eq(studioAbsences.studioId, booking.studio.id),
-        eq(studioAbsences.clientUserId, userId),
-        eq(studioAbsences.absentOn, todayYmd)
-      )
-    )
-    .limit(1);
-  if (!existing) {
+  if (absent) {
+    if (turn.status === "absent") return booking;
+    const month = ymd.slice(0, 7);
+    const prior = await db
+      .select({
+        outcome: studioAbsences.outcome,
+        absentOn: studioAbsences.absentOn,
+      })
+      .from(studioAbsences)
+      .where(
+        and(
+          eq(studioAbsences.studioId, booking.studio.id),
+          eq(studioAbsences.clientUserId, userId)
+        )
+      );
+    const cancelsThisMonth = prior.filter((item) =>
+      item.absentOn.startsWith(month)
+    ).length;
+    if (cancelsThisMonth >= booking.studio.maxCancelsPerMonth) {
+      throw new Error("Ya no te quedan cancelaciones este mes.");
+    }
+    const usedThisMonth = prior.filter(
+      (item) => item.outcome === "credit" && item.absentOn.startsWith(month)
+    ).length;
+    const outcome =
+      booking.turnPlan === "fixed"
+        ? "notice"
+        : cancellationOutcome({
+            classAt: classStart(ymd, turn.slotStart),
+            now: new Date(),
+            noticeHours: booking.studio.cancelNoticeHours,
+            usedThisMonth,
+            maxPerMonth: booking.studio.maxCancelsPerMonth,
+          });
     await db.insert(studioAbsences).values({
       id: uid(),
       studioId: booking.studio.id,
       clientUserId: userId,
-      absentOn: todayYmd,
-      weekday: todayWeekday,
-      slotStart: todayRow.slotStart,
+      absentOn: ymd,
+      weekday: turn.weekday,
+      slotStart: turn.slotStart,
+      outcome,
+    });
+  } else {
+    if (turn.status !== "absent") return booking;
+    if (turn.outcome === "credit") {
+      const month = ymd.slice(0, 7);
+      const available =
+        booking.turnPlan === "week"
+          ? (booking.credits.creditsByWeek[mondayOfYmd(ymd)] ?? 0)
+          : (booking.credits.creditsByMonth[month] ?? 0);
+      if (available < 1) {
+        throw new Error(
+          "Ya usaste ese crédito. Soltá la clase que tomaste antes de retirar el aviso."
+        );
+      }
+    }
+    if (await slotIsFullFor(booking.studio.id, userId, ymd, turn.slotStart)) {
+      throw new Error("Ese horario ya lo tomó otra persona.");
+    }
+    await db
+      .delete(studioAbsences)
+      .where(
+        and(
+          eq(studioAbsences.studioId, booking.studio.id),
+          eq(studioAbsences.clientUserId, userId),
+          eq(studioAbsences.absentOn, ymd)
+        )
+      );
+  }
+  return loadClientBooking();
+}
+
+/** Un día fijo anulado habilita un solo horario de ese mismo día. */
+async function assertFixedDayMove(
+  studioId: string,
+  userId: string,
+  ymd: string
+) {
+  const db = getDb();
+  const [absence] = await db
+    .select({ id: studioAbsences.id })
+    .from(studioAbsences)
+    .where(
+      and(
+        eq(studioAbsences.studioId, studioId),
+        eq(studioAbsences.clientUserId, userId),
+        eq(studioAbsences.absentOn, ymd)
+      )
+    )
+    .limit(1);
+  if (!absence) {
+    throw new Error("Con días fijos solo podés anotarte el día que anulaste.");
+  }
+  const [recovery] = await db
+    .select({ id: studioMonthTurns.id })
+    .from(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, studioId),
+        eq(studioMonthTurns.clientUserId, userId),
+        eq(studioMonthTurns.occursOn, ymd),
+        eq(studioMonthTurns.source, "recovery"),
+        eq(studioMonthTurns.status, "scheduled")
+      )
+    )
+    .limit(1);
+  if (recovery) throw new Error("Ya te anotaste ese día.");
+}
+
+/** Gasta un crédito en un horario libre de un día concreto. */
+export async function bookRecoveryTurn(occursOn: string, slotStart: string) {
+  const ymd = occursOn.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  const booking = await loadClientBooking();
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  const userId = await requireUserId();
+  if (booking.turnPlan === "fixed") {
+    await assertFixedDayMove(booking.studio.id, userId, ymd);
+  } else {
+    const creditKey =
+      booking.turnPlan === "week" ? mondayOfYmd(ymd) : ymd.slice(0, 7);
+    const available =
+      booking.turnPlan === "week"
+        ? (booking.credits.creditsByWeek[creditKey] ?? 0)
+        : (booking.credits.creditsByMonth[creditKey] ?? 0);
+    if (available < 1) {
+      throw new Error(
+        booking.turnPlan === "week"
+          ? "No tenés un crédito de esa semana."
+          : "No tenés créditos de ese mes."
+      );
+    }
+  }
+  if (ymd <= booking.today) {
+    throw new Error("Elegí un día posterior a hoy.");
+  }
+  const day = booking.recoveryDays.find((item) => item.occursOn === ymd);
+  const slot = day?.slots.find((item) => item.slotStart === slotStart);
+  if (!slot) throw new Error("Ese horario no existe.");
+  if (slot.mine) {
+    throw new Error("Ese horario ya es tuyo ese día.");
+  }
+  if (!slot.open) throw new Error("No hay profesor en ese horario.");
+  if (!slot.bookable) throw new Error("Ese horario está lleno.");
+  const weekday = new Date(`${ymd}T12:00:00`).getDay();
+  const shifts = await getDb()
+    .select()
+    .from(studioTeacherShifts)
+    .where(eq(studioTeacherShifts.studioId, booking.studio.id));
+  const covering = shifts.filter(
+    (shift) =>
+      shift.weekday === weekday &&
+      hourCovers(shift.startHour, shift.endHour, slotStart)
+  );
+  const chosen =
+    covering.find((shift) => shift.teacherUserId === booking.teacher?.userId) ??
+    covering[0];
+  if (!chosen) throw new Error("No hay profesor en ese horario.");
+  const db = getDb();
+  const [existing] = await db
+    .select({
+      id: studioMonthTurns.id,
+      status: studioMonthTurns.status,
+    })
+    .from(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, booking.studio.id),
+        eq(studioMonthTurns.clientUserId, userId),
+        eq(studioMonthTurns.occursOn, ymd),
+        eq(studioMonthTurns.slotStart, slotStart)
+      )
+    )
+    .limit(1);
+  if (existing?.status === "scheduled") {
+    throw new Error("Ese horario ya es tuyo ese día.");
+  }
+  if (existing) {
+    await db
+      .update(studioMonthTurns)
+      .set({
+        status: "scheduled",
+        source: "recovery",
+        teacherUserId: chosen.teacherUserId,
+        weekday,
+      })
+      .where(eq(studioMonthTurns.id, existing.id));
+  } else {
+    await db.insert(studioMonthTurns).values({
+      id: uid(),
+      studioId: booking.studio.id,
+      clientUserId: userId,
+      occursOn: ymd,
+      weekday,
+      slotStart,
+      teacherUserId: chosen.teacherUserId,
+      source: "recovery",
+      status: "scheduled",
     });
   }
-  return loadClientTodayHome();
+  await db
+    .delete(studioWaitlist)
+    .where(
+      and(
+        eq(studioWaitlist.studioId, booking.studio.id),
+        eq(studioWaitlist.clientUserId, userId),
+        eq(studioWaitlist.occursOn, ymd),
+        ...(booking.turnPlan === "fixed"
+          ? []
+          : [eq(studioWaitlist.slotStart, slotStart)])
+      )
+    );
+  return loadClientBooking();
+}
+
+/** Reserva un crédito en la lista de un horario lleno. */
+export async function joinWaitlist(occursOn: string, slotStart: string) {
+  const ymd = occursOn.trim();
+  const hour = slotStart.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  const booking = await loadClientBooking();
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  const userId = await requireUserId();
+  if (booking.turnPlan === "fixed") {
+    await assertFixedDayMove(booking.studio.id, userId, ymd);
+    const [waitingDay] = await getDb()
+      .select({ id: studioWaitlist.id })
+      .from(studioWaitlist)
+      .where(
+        and(
+          eq(studioWaitlist.studioId, booking.studio.id),
+          eq(studioWaitlist.clientUserId, userId),
+          eq(studioWaitlist.occursOn, ymd)
+        )
+      )
+      .limit(1);
+    if (waitingDay) {
+      throw new Error("Ya estás en la lista de espera ese día.");
+    }
+  } else {
+    const creditKey =
+      booking.turnPlan === "week" ? mondayOfYmd(ymd) : ymd.slice(0, 7);
+    const available =
+      booking.turnPlan === "week"
+        ? (booking.credits.creditsByWeek[creditKey] ?? 0)
+        : (booking.credits.creditsByMonth[creditKey] ?? 0);
+    if (available < 1) {
+      throw new Error(
+        booking.turnPlan === "week"
+          ? "No tenés un crédito de esa semana para la lista."
+          : "No tenés créditos de ese mes para anotarte en la lista."
+      );
+    }
+  }
+  if (ymd <= booking.today) {
+    throw new Error("Elegí un día posterior a hoy.");
+  }
+  const day = booking.recoveryDays.find((item) => item.occursOn === ymd);
+  const slot = day?.slots.find((item) => item.slotStart === hour);
+  if (!slot) throw new Error("Ese horario no existe.");
+  if (slot.mine) {
+    throw new Error("Ese horario ya es tuyo ese día.");
+  }
+  if (slot.waiting) throw new Error("Ya estás en la lista de espera.");
+  if (!slot.open) throw new Error("No hay profesor en ese horario.");
+  if (!slot.full) throw new Error("Hay lugar: anotáte directo.");
+  await getDb().insert(studioWaitlist).values({
+    id: uid(),
+    studioId: booking.studio.id,
+    clientUserId: userId,
+    occursOn: ymd,
+    weekday: new Date(`${ymd}T12:00:00`).getDay(),
+    slotStart: hour,
+  });
+  await fillWaitlist(booking.studio.id, { occursOn: ymd, slotStart: hour });
+  return loadClientBooking();
+}
+
+/** Sale de la lista y devuelve el crédito reservado. */
+export async function leaveWaitlist(occursOn: string, slotStart: string) {
+  const ymd = occursOn.trim();
+  const hour = slotStart.trim();
+  const userId = await requireUserId();
+  const member = await membershipFor(userId, "client");
+  if (!member) throw new Error("No hay un gimnasio vinculado.");
+  await getDb()
+    .delete(studioWaitlist)
+    .where(
+      and(
+        eq(studioWaitlist.studioId, member.studioId),
+        eq(studioWaitlist.clientUserId, userId),
+        eq(studioWaitlist.occursOn, ymd),
+        eq(studioWaitlist.slotStart, hour)
+      )
+    );
+  return loadClientBooking();
+}
+
+async function slotIsFullFor(
+  studioId: string,
+  clientUserId: string,
+  occursOn: string,
+  slotStart: string
+) {
+  const db = getDb();
+  const [studioRow] = await db
+    .select()
+    .from(studios)
+    .where(eq(studios.id, studioId))
+    .limit(1);
+  if (!studioRow) return false;
+  const studio = toStudio(studioRow);
+  const weekday = new Date(`${occursOn}T12:00:00`).getDay();
+  const hours = hoursForWeekday(studio.dayHours, weekday);
+  if (!hours) return false;
+  const [members, scheduled] = await Promise.all([
+    db
+      .select()
+      .from(studioMemberships)
+      .where(eq(studioMemberships.studioId, studioId)),
+    db
+      .select({ clientUserId: studioMonthTurns.clientUserId })
+      .from(studioMonthTurns)
+      .where(
+        and(
+          eq(studioMonthTurns.studioId, studioId),
+          eq(studioMonthTurns.occursOn, occursOn),
+          eq(studioMonthTurns.slotStart, slotStart),
+          eq(studioMonthTurns.status, "scheduled")
+        )
+      ),
+  ]);
+  const activitiesByClient = new Map(
+    members
+      .filter((item) => item.role === "client")
+      .map(
+        (item) =>
+          [item.userId, memberActivities(item.activities, studio.kinds)] as const
+      )
+  );
+  let gymTaken = 0;
+  let pilatesTaken = 0;
+  for (const turn of scheduled) {
+    if (turn.clientUserId === clientUserId) continue;
+    const activities = activitiesByClient.get(turn.clientUserId) ?? studio.kinds;
+    if (activities.includes("gym")) gymTaken += 1;
+    if (activities.includes("pilates")) pilatesTaken += 1;
+  }
+  const mine = activitiesByClient.get(clientUserId) ?? studio.kinds;
+  const gymCapacity = studioHasKind(studio.kinds, "gym")
+    ? dayKindCapacity(hours, "gym")
+    : 0;
+  const pilatesCapacity = studioHasKind(studio.kinds, "pilates")
+    ? dayKindCapacity(hours, "pilates")
+    : 0;
+  return occupancyForActivities(
+    { gymTaken, gymCapacity, pilatesTaken, pilatesCapacity },
+    mine
+  ).full;
+}
+
+/** Devuelve el crédito de una clase tomada, si todavía no pasó. */
+export async function cancelRecoveryTurn(turnId: string) {
+  const booking = await loadClientBooking();
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  const turn = booking.monthTurns.find((item) => item.id === turnId);
+  if (!turn || turn.source !== "recovery") {
+    throw new Error("Esa clase no es un recupero.");
+  }
+  if (turn.occursOn < booking.today || classSlotPassed(turn.occursOn, turn.slotStart)) {
+    throw new Error("Esa clase ya pasó.");
+  }
+  const userId = await requireUserId();
+  await getDb()
+    .delete(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.id, turnId),
+        eq(studioMonthTurns.clientUserId, userId),
+        eq(studioMonthTurns.source, "recovery")
+      )
+    );
+  return loadClientBooking();
+}
+
+/** El alumno avisa que hoy no asiste y libera el cupo de ese día. */
+export async function markClientAbsenceToday() {
+  const booking = await setClientAbsence(todayBillingYmd(), true);
+  if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  return todayHomeFromBooking(booking);
 }
 
 /** Cancela el aviso de ausencia de hoy. */
 export async function cancelClientAbsenceToday() {
-  const booking = await loadClientBooking();
+  const booking = await setClientAbsence(todayBillingYmd(), false);
   if (!booking) throw new Error("No hay un gimnasio vinculado.");
-  const userId = await requireUserId();
-  const todayYmd = todayBillingYmd();
-  await getDb()
-    .delete(studioAbsences)
-    .where(
-      and(
-        eq(studioAbsences.studioId, booking.studio.id),
-        eq(studioAbsences.clientUserId, userId),
-        eq(studioAbsences.absentOn, todayYmd)
-      )
-    );
-  return loadClientTodayHome();
+  return todayHomeFromBooking(booking);
 }
 
 export type StudioAbsenceView = {
@@ -3709,6 +5406,7 @@ export type StudioAbsenceView = {
   slotStart: string;
   teacherUserId: string | null;
   teacherName: string | null;
+  outcome: "credit" | "notice";
 };
 
 async function absenceViewsForStudios(
@@ -3787,6 +5485,7 @@ async function absenceViewsForStudios(
       teacherName: teacherUserId
         ? (nameByMember.get(`${row.studioId}:${teacherUserId}`) ?? "Profesor")
         : null,
+      outcome: row.outcome,
     };
   });
 }
@@ -4476,6 +6175,12 @@ export async function saveClientReservations(
   if (!member || member.role !== "client") {
     throw new Error("No tienes un cupo de alumno en un gimnasio.");
   }
+  const turnPlan = parseTurnPlan(member.turnPlan);
+  if (turnPlan === "fixed") {
+    throw new Error(
+      "Con días fijos no podés cambiar los horarios. Pedile al gimnasio."
+    );
+  }
   const allowed = member.sessionsPerWeek ?? 1;
   const teacherId = member.assignedTeacherUserId;
   if (!teacherId) {
@@ -4499,6 +6204,7 @@ export async function saveClientReservations(
     allowed,
     activities: memberActivities(member.activities, studio.kinds),
     picks,
+    requireExact: true,
   });
 
   const db = getDb();
@@ -4513,5 +6219,6 @@ export async function saveClientReservations(
   if (rows.length) {
     await db.insert(studioReservations).values(rows);
   }
+  await syncFixedMonthTurns(studio.id, userId);
   return loadClientBooking();
 }

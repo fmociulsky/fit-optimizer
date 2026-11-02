@@ -118,6 +118,7 @@ export function GymClientsView() {
       emergencyPhone: client.emergencyPhone,
       activities: client.activities,
       sessionsPerWeek: client.sessionsPerWeek,
+      turnPlan: client.turnPlan,
       assignedTeacherUserId: client.assignedTeacherUserId,
       picks: client.reservations.map((item) => ({
         weekday: item.weekday,
@@ -337,6 +338,12 @@ export function GymClientsView() {
                           ? "1 día por semana"
                           : `${client.sessionsPerWeek} días por semana`
                         : "Días que asiste"}
+                      {" · "}
+                      {client.turnPlan === "fixed"
+                        ? "Días fijos"
+                        : client.turnPlan === "week"
+                          ? "Recupera en la semana"
+                          : "Recupera en el mes"}
                     </p>
                     {client.reservations.length > 0 ? (
                       <ul className="mt-2 space-y-1.5">
