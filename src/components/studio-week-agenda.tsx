@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { List } from "lucide-react";
 import { SiteHeader } from "@/components/site-header";
 import { useNow } from "@/components/use-now";
@@ -61,6 +61,179 @@ function roomTone(free: number) {
   return "bg-red-500 ring-1 ring-red-800";
 }
 
+function AgendaSlotCard({
+  day,
+  hour,
+  slot,
+  today,
+  now,
+  pendingKey,
+  layout,
+  onAnnul,
+  onEnroll,
+  onWaitlist,
+}: {
+  day: WeekAgendaDay;
+  hour: string;
+  slot: DayAgendaSlot;
+  today: string;
+  now: Date;
+  pendingKey: string | null;
+  layout: "compact" | "comfortable";
+  onAnnul: (occursOn: string, hour: string, student: NextHourPerson) => void;
+  onEnroll: (input: {
+    occursOn: string;
+    hour: string;
+    openSeat: boolean;
+    takenIds: string[];
+  }) => void;
+  onWaitlist: (input: {
+    occursOn: string;
+    hour: string;
+    people: NextHourPerson[];
+  }) => void;
+}) {
+  const students = studentsInSlot(slot).filter((item) => !item.absent);
+  const teacherNames = slot.teachers.map((item) => item.name).join(" · ");
+  const past = Boolean(today && day.occursOn < today);
+  const current = isCurrentClassSlot(day.occursOn, hour, now);
+  const canEnroll = !past && slot.teachers.length > 0;
+  const waiting = slot.waiting ?? [];
+  const comfortable = layout === "comfortable";
+
+  return (
+    <div
+      className={cn(
+        "relative rounded-xl",
+        comfortable ? "min-h-20 px-3 py-3" : "min-h-16 px-1.5 py-1.5",
+        roomTone(slot.free ?? 0),
+        (canEnroll || waiting.length > 0) && (comfortable ? "pb-11" : "pb-8"),
+        current && "outline outline-2 -outline-offset-2 outline-foreground"
+      )}
+    >
+      {current ? (
+        <p
+          className={cn(
+            "font-semibold tracking-wide uppercase",
+            comfortable ? "text-xs" : "text-[10px]"
+          )}
+        >
+          Ahora
+        </p>
+      ) : null}
+      <p
+        className={cn(
+          "truncate font-medium leading-tight",
+          comfortable ? "text-sm" : "text-[10px]"
+        )}
+      >
+        {teacherNames ? `Profe: ${teacherNames}` : "Sin profe"}
+      </p>
+      {slot.occupancy ? (
+        <p
+          className={cn(
+            "font-medium leading-tight",
+            comfortable ? "mt-0.5 text-sm" : "text-[11px]"
+          )}
+        >
+          {slot.occupancy}
+        </p>
+      ) : null}
+      {canEnroll ? (
+        <button
+          type="button"
+          disabled={pendingKey !== null}
+          aria-label={`Anotar alumno el ${formatClassDate(day.occursOn)} a las ${hour}`}
+          onClick={() =>
+            onEnroll({
+              occursOn: day.occursOn,
+              hour,
+              openSeat: (slot.free ?? 0) > 0,
+              takenIds: [
+                ...students.map((item) => item.userId),
+                ...waiting.map((item) => item.userId),
+              ],
+            })
+          }
+          className={cn(
+            "absolute right-1.5 bottom-1.5 grid place-items-center rounded-full bg-background font-semibold text-foreground shadow-sm ring-1 ring-foreground/25 hover:bg-foreground hover:text-background disabled:opacity-40",
+            comfortable
+              ? "size-8 text-base leading-none"
+              : "size-6 text-sm leading-none"
+          )}
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+      ) : null}
+      {waiting.length > 0 ? (
+        <button
+          type="button"
+          aria-label={`Lista de espera del ${formatClassDate(day.occursOn)} a las ${hour}, ${waiting.length}`}
+          onClick={() =>
+            onWaitlist({
+              occursOn: day.occursOn,
+              hour,
+              people: waiting,
+            })
+          }
+          className={cn(
+            "absolute bottom-1.5 left-1.5 grid place-items-center rounded-full bg-background text-foreground shadow-sm ring-1 ring-foreground/25 hover:bg-foreground hover:text-background",
+            comfortable ? "size-8" : "size-6"
+          )}
+        >
+          <List
+            className={comfortable ? "size-4" : "size-3.5"}
+            aria-hidden="true"
+          />
+        </button>
+      ) : null}
+      {students.length > 0 ? (
+        <ul className={cn("mt-1", comfortable ? "space-y-1.5" : "space-y-1")}>
+          {students.map((student) => {
+            const key = `${day.occursOn}|${hour}|${student.userId}`;
+            const pending = pendingKey === key;
+            return (
+              <li
+                key={student.userId}
+                className={cn(
+                  "flex items-center gap-1 rounded-md ring-1",
+                  comfortable ? "px-2 py-1.5" : "px-1.5 py-1",
+                  planChipClass(student.turnPlan)
+                )}
+              >
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate font-medium leading-tight",
+                    comfortable ? "text-sm" : "text-[11px]"
+                  )}
+                >
+                  {student.name}
+                </span>
+                {past ? null : (
+                  <button
+                    type="button"
+                    disabled={pending || pendingKey !== null}
+                    aria-label={`Anular el turno de ${student.name}`}
+                    onClick={() => onAnnul(day.occursOn, hour, student)}
+                    className={cn(
+                      "grid shrink-0 place-items-center rounded bg-foreground/10 font-semibold hover:bg-foreground/20 disabled:opacity-40",
+                      comfortable
+                        ? "size-6 text-sm leading-none"
+                        : "size-4 text-[12px] leading-none"
+                    )}
+                  >
+                    ×
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function StudioWeekAgenda({ studioId }: { studioId: string }) {
   const [name, setName] = useState("");
   const [today, setToday] = useState("");
@@ -71,6 +244,7 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
   const [requestedWeek, setRequestedWeek] = useState<string | undefined>(
     undefined
   );
+  const [selectedDay, setSelectedDay] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
@@ -101,6 +275,15 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
         setWeekStart(next.weekStart);
         setRecoverable(next.recoverable);
         setError("");
+        setSelectedDay((current) => {
+          if (current && next.days.some((day) => day.occursOn === current)) {
+            return current;
+          }
+          const todayDay = next.days.find(
+            (day) => day.occursOn === next.today
+          );
+          return todayDay?.occursOn ?? next.days[0]?.occursOn ?? "";
+        });
       })
       .catch((caught: unknown) => {
         if (cancelled) return;
@@ -118,15 +301,19 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
 
   async function annul(
     occursOn: string,
-    slotStart: string,
+    hour: string,
     student: NextHourPerson
   ) {
-    const key = `${occursOn}|${slotStart}|${student.userId}`;
+    const key = `${occursOn}|${hour}|${student.userId}`;
     setPendingKey(key);
     setError("");
     try {
-      await annulStudentTurn(studioId, student.userId, occursOn, slotStart);
-      const next = await loadWeekAgenda(studioId, requestedWeek);
+      const next = await annulStudentTurn(
+        studioId,
+        student.userId,
+        occursOn,
+        hour
+      );
       setName(next.name);
       setToday(next.today);
       setFrom(next.from);
@@ -149,13 +336,12 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
     setPendingKey(key);
     setError("");
     try {
-      await removeStudentFromWaitlist(
+      const next = await removeStudentFromWaitlist(
         studioId,
         person.userId,
         waitlist.occursOn,
         waitlist.hour
       );
-      const next = await loadWeekAgenda(studioId, requestedWeek);
       setName(next.name);
       setToday(next.today);
       setFrom(next.from);
@@ -163,15 +349,15 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
       setDays(next.days);
       setWeekStart(next.weekStart);
       setRecoverable(next.recoverable);
-      const people = waitlist.people.filter(
-        (item) => item.userId !== person.userId
-      );
-      setWaitlist(people.length > 0 ? { ...waitlist, people } : null);
+      const day = next.days.find((item) => item.occursOn === waitlist.occursOn);
+      const slot = day?.slots.find((item) => item.slotStart === waitlist.hour);
+      const people = slot?.waiting ?? [];
+      setWaitlist(people.length ? { ...waitlist, people } : null);
     } catch (caught: unknown) {
       setError(
         caught instanceof Error
           ? caught.message
-          : "No se pudo sacar al alumno de la lista."
+          : "No se pudo sacar de la lista de espera."
       );
     } finally {
       setPendingKey(null);
@@ -184,13 +370,12 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
     setPendingKey(key);
     setError("");
     try {
-      await enrollStudentWithCredit(
+      const next = await enrollStudentWithCredit(
         studioId,
         student.userId,
         enroll.occursOn,
         enroll.hour
       );
-      const next = await loadWeekAgenda(studioId, requestedWeek);
       setName(next.name);
       setToday(next.today);
       setFrom(next.from);
@@ -211,16 +396,22 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
   const start = weekStart || (today ? mondayOfYmd(today) : "");
   const end = start ? shiftYmd(start, 6) : "";
   const now = useNow();
-  const hours = [
-    ...new Set(days.flatMap((day) => day.slots.map((slot) => slot.slotStart))),
-  ].sort();
+  const hours = useMemo(
+    () =>
+      [
+        ...new Set(days.flatMap((day) => day.slots.map((slot) => slot.slotStart))),
+      ].sort(),
+    [days]
+  );
   const atStart = !start || !from || start <= from;
   const atEnd = !start || !to || shiftYmd(start, 7) > to;
+  const mobileDay =
+    days.find((day) => day.occursOn === selectedDay) ?? days[0] ?? null;
 
   return (
     <div className="min-h-svh bg-background">
       <SiteHeader />
-      <main className="mx-auto w-full max-w-5xl px-4 py-8">
+      <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:py-8">
         <StudioBranchNav
           studioId={studioId}
           name={name || "Sucursal"}
@@ -238,12 +429,13 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="shrink-0"
                 disabled={atStart || loading || pendingKey !== null}
                 onClick={() => setRequestedWeek(shiftYmd(start, -7))}
               >
                 Atrás
               </Button>
-              <p className="text-center text-sm font-medium">
+              <p className="min-w-0 text-center text-sm font-medium">
                 {start && end
                   ? `${formatDayMonth(start)} – ${formatDayMonth(end)}`
                   : ""}
@@ -252,6 +444,7 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
                 type="button"
                 variant="outline"
                 size="sm"
+                className="shrink-0"
                 disabled={atEnd || loading || pendingKey !== null}
                 onClick={() => setRequestedWeek(shiftYmd(start, 7))}
               >
@@ -276,161 +469,143 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
                 Esta semana no tiene horarios.
               </p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
-                <div
-                  className="grid min-w-[64rem] gap-1"
-                  style={{
-                    gridTemplateColumns: "3.2rem repeat(7, minmax(0, 1fr))",
-                  }}
-                >
-                  <div />
-                  {days.map((day) => {
-                    const label =
-                      WEEKDAYS.find((item) => item.id === day.weekday)?.short ??
-                      "";
-                    return (
-                      <div
-                        key={day.occursOn}
-                        className={cn(
-                          "rounded-xl px-1 py-2 text-center",
-                          day.occursOn === today && "bg-primary/10"
-                        )}
-                      >
-                        <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                          {label}
-                        </p>
-                        <p className="text-sm font-medium">
-                          {Number(day.occursOn.slice(8))}
-                        </p>
-                      </div>
-                    );
-                  })}
-                  {hours.map((hour) => (
-                    <div key={hour} className="contents">
-                      <p className="flex items-start pt-2 text-xs font-medium">
-                        {hour}
-                      </p>
-                      {days.map((day) => {
-                        const slot = day.slots.find(
+              <>
+                {/* Celular: un día a la vez */}
+                <div className="mt-4 md:hidden">
+                  <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {days.map((day) => {
+                      const label =
+                        WEEKDAYS.find((item) => item.id === day.weekday)
+                          ?.short ?? "";
+                      const selected = day.occursOn === selectedDay;
+                      const isToday = day.occursOn === today;
+                      return (
+                        <button
+                          key={day.occursOn}
+                          type="button"
+                          onClick={() => setSelectedDay(day.occursOn)}
+                          className={cn(
+                            "flex min-w-[3.25rem] shrink-0 flex-col items-center rounded-2xl px-2.5 py-2 transition-colors",
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : isToday
+                                ? "bg-primary/12 text-foreground"
+                                : "bg-muted/60 text-foreground hover:bg-muted"
+                          )}
+                        >
+                          <span className="text-[11px] font-medium tracking-wide uppercase opacity-80">
+                            {label}
+                          </span>
+                          <span className="text-base font-semibold tabular-nums">
+                            {Number(day.occursOn.slice(8))}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {mobileDay ? (
+                    <div className="mt-4 space-y-3">
+                      <h2 className="font-heading text-2xl italic">
+                        {formatClassDate(mobileDay.occursOn)}
+                      </h2>
+                      {hours.map((hour) => {
+                        const slot = mobileDay.slots.find(
                           (item) => item.slotStart === hour
                         );
-                        if (!slot) {
-                          return <div key={day.occursOn} />;
-                        }
-                        const students = studentsInSlot(slot).filter(
-                          (item) => !item.absent
-                        );
-                        const teacherNames = slot.teachers
-                          .map((item) => item.name)
-                          .join(" · ");
-                        const past = Boolean(today && day.occursOn < today);
-                        const current = isCurrentClassSlot(day.occursOn, hour, now);
-                        const canEnroll = !past && slot.teachers.length > 0;
-                        const waiting = slot.waiting ?? [];
+                        if (!slot) return null;
                         return (
-                          <div
-                            key={day.occursOn}
-                            className={cn(
-                              "relative min-h-16 rounded-xl px-1.5 py-1.5",
-                              roomTone(slot.free ?? 0),
-                              (canEnroll || waiting.length > 0) && "pb-8",
-                              current &&
-                                "outline outline-2 -outline-offset-2 outline-foreground"
-                            )}
-                          >
-                            {current ? (
-                              <p className="text-[10px] font-semibold uppercase tracking-wide">
-                                Ahora
-                              </p>
-                            ) : null}
-                            <p className="truncate text-[10px] font-medium leading-tight">
-                              {teacherNames
-                                ? `Profe: ${teacherNames}`
-                                : "Sin profe"}
+                          <div key={hour} className="flex gap-3">
+                            <p className="w-12 shrink-0 pt-3 text-sm font-medium tabular-nums">
+                              {hour}
                             </p>
-                            {slot.occupancy ? (
-                              <p className="text-[11px] font-medium leading-tight">
-                                {slot.occupancy}
-                              </p>
-                            ) : null}
-                            {canEnroll ? (
-                              <button
-                                type="button"
-                                disabled={pendingKey !== null}
-                                aria-label={`Anotar alumno el ${formatClassDate(day.occursOn)} a las ${hour}`}
-                                onClick={() =>
-                                  setEnroll({
-                                    occursOn: day.occursOn,
-                                    hour,
-                                    openSeat: (slot.free ?? 0) > 0,
-                                    takenIds: [
-                                      ...students.map((item) => item.userId),
-                                      ...waiting.map((item) => item.userId),
-                                    ],
-                                  })
+                            <div className="min-w-0 flex-1">
+                              <AgendaSlotCard
+                                day={mobileDay}
+                                hour={hour}
+                                slot={slot}
+                                today={today}
+                                now={now}
+                                pendingKey={pendingKey}
+                                layout="comfortable"
+                                onAnnul={(occursOn, slotHour, student) =>
+                                  void annul(occursOn, slotHour, student)
                                 }
-                                className="absolute right-1.5 bottom-1.5 grid size-6 place-items-center rounded-full bg-background text-sm leading-none font-semibold text-foreground shadow-sm ring-1 ring-foreground/25 hover:bg-foreground hover:text-background disabled:opacity-40"
-                              >
-                                <span aria-hidden="true">+</span>
-                              </button>
-                            ) : null}
-                            {waiting.length > 0 ? (
-                              <button
-                                type="button"
-                                aria-label={`Lista de espera del ${formatClassDate(day.occursOn)} a las ${hour}, ${waiting.length}`}
-                                onClick={() =>
-                                  setWaitlist({
-                                    occursOn: day.occursOn,
-                                    hour,
-                                    people: waiting,
-                                  })
-                                }
-                                className="absolute bottom-1.5 left-1.5 grid size-6 place-items-center rounded-full bg-background text-foreground shadow-sm ring-1 ring-foreground/25 hover:bg-foreground hover:text-background"
-                              >
-                                <List className="size-3.5" aria-hidden="true" />
-                              </button>
-                            ) : null}
-                            {students.length > 0 ? (
-                              <ul className="mt-1 space-y-1">
-                                {students.map((student) => {
-                                  const key = `${day.occursOn}|${hour}|${student.userId}`;
-                                  const pending = pendingKey === key;
-                                  return (
-                                    <li
-                                      key={student.userId}
-                                      className={cn(
-                                        "flex items-center gap-1 rounded-md px-1.5 py-1 ring-1",
-                                        planChipClass(student.turnPlan)
-                                      )}
-                                    >
-                                      <span className="min-w-0 flex-1 truncate text-[11px] font-medium leading-tight">
-                                        {student.name}
-                                      </span>
-                                      {past ? null : (
-                                        <button
-                                          type="button"
-                                          disabled={pending || pendingKey !== null}
-                                          aria-label={`Anular el turno de ${student.name}`}
-                                          onClick={() =>
-                                            void annul(day.occursOn, hour, student)
-                                          }
-                                          className="grid size-4 shrink-0 place-items-center rounded bg-foreground/10 text-[12px] leading-none font-semibold hover:bg-foreground/20 disabled:opacity-40"
-                                        >
-                                          ×
-                                        </button>
-                                      )}
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            ) : null}
+                                onEnroll={setEnroll}
+                                onWaitlist={setWaitlist}
+                              />
+                            </div>
                           </div>
                         );
                       })}
                     </div>
-                  ))}
+                  ) : null}
                 </div>
-              </div>
+
+                {/* Escritorio: grilla semanal */}
+                <div className="mt-3 hidden overflow-x-auto md:block">
+                  <div
+                    className="grid min-w-[64rem] gap-1"
+                    style={{
+                      gridTemplateColumns: "3.2rem repeat(7, minmax(0, 1fr))",
+                    }}
+                  >
+                    <div />
+                    {days.map((day) => {
+                      const label =
+                        WEEKDAYS.find((item) => item.id === day.weekday)
+                          ?.short ?? "";
+                      return (
+                        <div
+                          key={day.occursOn}
+                          className={cn(
+                            "rounded-xl px-1 py-2 text-center",
+                            day.occursOn === today && "bg-primary/10"
+                          )}
+                        >
+                          <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                            {label}
+                          </p>
+                          <p className="text-sm font-medium">
+                            {Number(day.occursOn.slice(8))}
+                          </p>
+                        </div>
+                      );
+                    })}
+                    {hours.map((hour) => (
+                      <div key={hour} className="contents">
+                        <p className="flex items-start pt-2 text-xs font-medium">
+                          {hour}
+                        </p>
+                        {days.map((day) => {
+                          const slot = day.slots.find(
+                            (item) => item.slotStart === hour
+                          );
+                          if (!slot) {
+                            return <div key={day.occursOn} />;
+                          }
+                          return (
+                            <AgendaSlotCard
+                              key={day.occursOn}
+                              day={day}
+                              hour={hour}
+                              slot={slot}
+                              today={today}
+                              now={now}
+                              pendingKey={pendingKey}
+                              layout="compact"
+                              onAnnul={(occursOn, slotHour, student) =>
+                                void annul(occursOn, slotHour, student)
+                              }
+                              onEnroll={setEnroll}
+                              onWaitlist={setWaitlist}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
             )}
           </section>
         )}

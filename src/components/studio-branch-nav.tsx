@@ -20,7 +20,7 @@ export function StudioBranchNav({
       <h1 className="mt-2 font-heading text-4xl tracking-tight italic sm:text-5xl">
         {name}
       </h1>
-      <nav className="mt-5 flex flex-wrap gap-2">
+      <nav className="-mx-4 mt-5 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
         {(
           [
             ["agenda", "Agenda", ""],
@@ -37,7 +37,7 @@ export function StudioBranchNav({
               buttonVariants({
                 variant: active === id ? "default" : "outline",
               }),
-              "h-10 px-4"
+              "h-10 shrink-0 px-4"
             )}
           >
             {label}
