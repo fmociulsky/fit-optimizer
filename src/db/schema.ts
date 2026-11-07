@@ -145,6 +145,8 @@ export const studioMemberships = pgTable(
       .$type<ClientPaymentStatus>()
       .notNull()
       .default("current"),
+    /** El alumno avisó que pagó y el estudio todavía no lo confirmó. */
+    paymentClaimedAt: timestamp("payment_claimed_at", { withTimezone: true }),
     serviceEndsOn: text("service_ends_on").notNull().default(""),
     lastPaidOn: text("last_paid_on").notNull().default(""),
     planName: text("plan_name").notNull().default(""),
@@ -286,6 +288,8 @@ export const studioMonthTurns = pgTable(
       .$type<"scheduled" | "absent">()
       .notNull()
       .default("scheduled"),
+    /** Asistencia marcada por el profesor cuando el turno ya pasó. */
+    attendance: text("attendance").$type<"present" | "absent">(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

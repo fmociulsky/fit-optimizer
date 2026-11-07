@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, PauseCircle, Wallet } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import {
   formatBillingYmd,
   formatClientFee,
 } from "@/lib/client-account";
 import { CLIENT_PAYMENT_STATUS_LABEL } from "@/lib/labels";
 import {
+  claimClientPayment,
   loadClientBillingHome,
   type ClientBillingHome,
 } from "@/lib/studio";
@@ -27,6 +30,7 @@ function statusCopy(billing: ClientBillingHome) {
       detail: ends ? `Estaba vigente hasta el ${ends}.` : "Tu cuenta está en pausa.",
       tone: "muted" as const,
       Icon: PauseCircle,
+      canClaim: false,
     };
   }
   if (billing.paymentStatus === "comp") {
@@ -35,12 +39,24 @@ function statusCopy(billing: ClientBillingHome) {
       detail: ends ? `Vigente hasta el ${ends}.` : "Sin cargo por ahora.",
       tone: "ok" as const,
       Icon: CheckCircle2,
+      canClaim: false,
     };
   }
   if (
     billing.paymentStatus === "overdue" ||
     billing.alert === "expired"
   ) {
+    if (billing.paymentClaimed) {
+      return {
+        title: "Aviso de pago enviado",
+        detail: ends
+          ? `Avisaste el pago. El gimnasio lo está revisando. Venció el ${ends}${plan !== "—" ? ` · ${plan}` : ""}${fee ? ` · ${fee}` : ""}.`
+          : "Avisaste el pago. El gimnasio lo está revisando.",
+        tone: "warn" as const,
+        Icon: AlertTriangle,
+        canClaim: false,
+      };
+    }
     return {
       title: "Pago vencido",
       detail: ends
@@ -48,6 +64,7 @@ function statusCopy(billing: ClientBillingHome) {
         : "Tu cuota figura con deuda. Consultá en recepción.",
       tone: "danger" as const,
       Icon: AlertTriangle,
+      canClaim: true,
     };
   }
   if (billing.alert === "due_soon") {
@@ -58,6 +75,7 @@ function statusCopy(billing: ClientBillingHome) {
         : "Renová pronto para no interrumpir tus clases.",
       tone: "warn" as const,
       Icon: AlertTriangle,
+      canClaim: false,
     };
   }
   if (!billing.serviceEndsOn && !billing.planName) {
@@ -66,6 +84,7 @@ function statusCopy(billing: ClientBillingHome) {
       detail: "Cuando el gimnasio te asigne la cuota, la ves acá.",
       tone: "muted" as const,
       Icon: Wallet,
+      canClaim: false,
     };
   }
   return {
@@ -75,12 +94,13 @@ function statusCopy(billing: ClientBillingHome) {
       : `${plan}${fee ? ` · ${fee}` : ""}`,
     tone: "ok" as const,
     Icon: CheckCircle2,
+    canClaim: false,
   };
 }
 
 const toneClass = {
   ok: "border-emerald-600/40 bg-emerald-500/20 text-emerald-950 dark:border-emerald-400/40 dark:bg-emerald-500/25 dark:text-emerald-50",
-  warn: "border-amber-500/30 bg-amber-500/10",
+  warn: "border-amber-500/40 bg-amber-400/25 text-amber-950 dark:border-amber-400/40 dark:bg-amber-500/25 dark:text-amber-50",
   danger:
     "border-red-700/60 bg-red-600/25 text-red-950 dark:border-red-400/50 dark:bg-red-600/35 dark:text-red-50",
   muted: "border-foreground/8 bg-card",
@@ -88,14 +108,14 @@ const toneClass = {
 
 const iconClass = {
   ok: "text-emerald-700 dark:text-emerald-300",
-  warn: "text-amber-700 dark:text-amber-400",
+  warn: "text-amber-800 dark:text-amber-300",
   danger: "text-red-700 dark:text-red-300",
   muted: "text-muted-foreground",
 } as const;
 
 const detailClass = {
   ok: "text-emerald-900/80 dark:text-emerald-100/80",
-  warn: "text-muted-foreground",
+  warn: "text-amber-950/85 dark:text-amber-100/85",
   danger: "text-red-900/85 dark:text-red-100/85",
   muted: "text-muted-foreground",
 } as const;
@@ -104,6 +124,7 @@ export function ClientBillingHomeCard() {
   const [billing, setBilling] = useState<
     ClientBillingHome | null | undefined
   >(undefined);
+  const [claiming, setClaiming] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +139,23 @@ export function ClientBillingHomeCard() {
       cancelled = true;
     };
   }, []);
+
+  async function claimPayment() {
+    if (claiming) return;
+    setClaiming(true);
+    try {
+      const next = await claimClientPayment();
+      if (!next) throw new Error("No se pudo avisar el pago.");
+      setBilling(next);
+      toast.success("Avisaste el pago. El gimnasio lo va a revisar.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "No se pudo avisar el pago."
+      );
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   if (billing === undefined) {
     return (
@@ -142,11 +180,23 @@ export function ClientBillingHomeCard() {
       <Icon
         className={cn("mt-0.5 size-5 shrink-0", iconClass[copy.tone])}
       />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="font-medium">{copy.title}</p>
         <p className={cn("mt-0.5 text-sm", detailClass[copy.tone])}>
           {copy.detail}
         </p>
+        {copy.canClaim ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3 h-9 border-red-800/40 bg-background/80"
+            disabled={claiming}
+            onClick={() => void claimPayment()}
+          >
+            {claiming ? "Avisando…" : "Avisar pago"}
+          </Button>
+        ) : null}
       </div>
     </section>
   );

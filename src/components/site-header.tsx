@@ -10,6 +10,7 @@ import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
+  CalendarOff,
   ChartColumn,
   Dumbbell,
   GraduationCap,
@@ -221,6 +222,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                         !pathname.startsWith("/estudio/profesores") &&
                         !pathname.startsWith("/estudio/alumnos") &&
                         !pathname.startsWith("/estudio/cuentas") &&
+                        !pathname.startsWith("/estudio/ausencias") &&
                         !pathname.startsWith("/estudio/estadisticas") &&
                         !pathname.startsWith("/estudio/datos") &&
                         !pathname.startsWith("/estudio/configuracion"))
@@ -262,6 +264,17 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     onNavigate={() => setOpen(false)}
                   >
                     Cuentas
+                  </MenuLink>
+                  <MenuLink
+                    href="/estudio/ausencias"
+                    active={
+                      pathname === "/estudio/ausencias" ||
+                      pathname.startsWith("/estudio/ausencias/")
+                    }
+                    icon={CalendarOff}
+                    onNavigate={() => setOpen(false)}
+                  >
+                    Ausencias
                   </MenuLink>
                   <MenuLink
                     href="/estudio/estadisticas"

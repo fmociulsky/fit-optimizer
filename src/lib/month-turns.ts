@@ -2,6 +2,7 @@ import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   studioAbsences,
+  studioMemberships,
   studioMonthTurns,
   studioReservations,
   studios,
@@ -116,7 +117,18 @@ export async function syncFixedMonthTurns(
         lte(studioAbsences.absentOn, to)
       );
 
-  const [reservations, existing, absences] = await Promise.all([
+  const memberWhere = clientUserId
+    ? and(
+        eq(studioMemberships.studioId, studioId),
+        eq(studioMemberships.userId, clientUserId),
+        eq(studioMemberships.role, "client")
+      )
+    : and(
+        eq(studioMemberships.studioId, studioId),
+        eq(studioMemberships.role, "client")
+      );
+
+  const [reservations, existing, absences, members] = await Promise.all([
     db.select().from(studioReservations).where(reservationWhere),
     db.select().from(studioMonthTurns).where(turnWhere),
     db
@@ -126,7 +138,20 @@ export async function syncFixedMonthTurns(
       })
       .from(studioAbsences)
       .where(absenceWhere),
+    db
+      .select({
+        userId: studioMemberships.userId,
+        paymentStatus: studioMemberships.paymentStatus,
+      })
+      .from(studioMemberships)
+      .where(memberWhere),
   ]);
+
+  const pausedClientIds = new Set(
+    members
+      .filter((item) => item.paymentStatus === "paused")
+      .map((item) => item.userId)
+  );
 
   const absentKeys = new Set(
     absences.map((row) => `${row.clientUserId}|${row.absentOn}`)
@@ -156,6 +181,7 @@ export async function syncFixedMonthTurns(
     const weekday = weekdayOf(ymd);
     for (const reservation of reservations) {
       if (reservation.weekday !== weekday) continue;
+      if (pausedClientIds.has(reservation.clientUserId)) continue;
       const key = `${reservation.clientUserId}|${ymd}`;
       expectedKeys.add(key);
       const status: MonthTurnStatus = absentKeys.has(key)

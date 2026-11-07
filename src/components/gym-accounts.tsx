@@ -29,6 +29,7 @@ import {
   listGymClientAccounts,
   listOwnedBranches,
   markGymClientPaid,
+  rejectGymClientPaymentClaim,
   seedGymClientBillingSamples,
   updateGymClientAccount,
   type GymClientAccount,
@@ -60,7 +61,34 @@ function formatDate(ymd: string) {
   }).format(date);
 }
 
+function accountRowTone(
+  row: GymClientAccount
+): "ok" | "warn" | "danger" | "neutral" {
+  if (row.paymentClaimed) return "warn";
+  if (row.paymentStatus === "overdue" || row.alert === "expired") {
+    return "danger";
+  }
+  if (row.paymentStatus === "current" && row.alert !== "due_soon") {
+    return "ok";
+  }
+  return "neutral";
+}
+
+const accountRowToneClass = {
+  ok: "bg-emerald-500/15",
+  warn: "bg-amber-400/25",
+  danger: "bg-red-600/20",
+  neutral: "bg-card",
+} as const;
+
 function statusBadge(row: GymClientAccount) {
+  if (row.paymentClaimed) {
+    return (
+      <Badge className="border-amber-600/40 bg-amber-400/30 text-amber-950 hover:bg-amber-400/30">
+        Avisó pago
+      </Badge>
+    );
+  }
   if (row.paymentStatus === "overdue" || row.alert === "expired") {
     return (
       <Badge variant="destructive">
@@ -82,7 +110,11 @@ function statusBadge(row: GymClientAccount) {
   if (row.paymentStatus === "comp") {
     return <Badge variant="outline">Cortesía</Badge>;
   }
-  return <Badge>Al día</Badge>;
+  return (
+    <Badge className="border-emerald-600/40 bg-emerald-500/25 text-emerald-950 hover:bg-emerald-500/25">
+      Al día
+    </Badge>
+  );
 }
 
 type Draft = {
@@ -179,8 +211,26 @@ export function GymAccountsView() {
       });
       replaceRow(next);
       toast.success(
-        `Pagado. Próximo vencimiento ${formatDate(next.serviceEndsOn)}.`
+        `Pago registrado. Próximo vencimiento ${formatDate(next.serviceEndsOn)}.`
       );
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setPayingId(null);
+    }
+  }
+
+  async function rejectClaim(row: GymClientAccount) {
+    const key = `${row.studioId}:${row.userId}`;
+    if (payingId) return;
+    setPayingId(key);
+    try {
+      const next = await rejectGymClientPaymentClaim({
+        studioId: row.studioId,
+        clientUserId: row.userId,
+      });
+      replaceRow(next);
+      toast.message("Pago no registrado. El alumno puede avisar de nuevo.");
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -210,6 +260,7 @@ export function GymAccountsView() {
     if (filter === "attention") {
       list = list.filter(
         (item) =>
+          item.paymentClaimed ||
           item.paymentStatus === "overdue" ||
           item.alert === "expired" ||
           item.alert === "due_soon"
@@ -374,8 +425,9 @@ export function GymAccountsView() {
               row.paymentStatus,
               row.serviceEndsOn
             );
+            const tone = accountRowTone(row);
             return (
-              <li key={key}>
+              <li key={key} className={accountRowToneClass[tone]}>
                 <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
                   <button
                     type="button"
@@ -412,14 +464,34 @@ export function GymAccountsView() {
                       {formatFee(row.feeAmount)}
                     </p>
                   </div>
-                  {showPaid ? (
+                  {row.paymentClaimed ? (
+                    <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
+                      <Button
+                        type="button"
+                        className="h-11 px-5"
+                        disabled={payingId === key}
+                        onClick={() => void markPaid(row)}
+                      >
+                        {payingId === key ? "Guardando…" : "Pago"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-11 px-5"
+                        disabled={payingId === key}
+                        onClick={() => void rejectClaim(row)}
+                      >
+                        Pago no registrado
+                      </Button>
+                    </div>
+                  ) : showPaid ? (
                     <Button
                       type="button"
                       className="h-11 shrink-0 px-5"
                       disabled={payingId === key}
                       onClick={() => void markPaid(row)}
                     >
-                      {payingId === key ? "Renovando…" : "Pagado"}
+                      {payingId === key ? "Renovando…" : "Pago"}
                     </Button>
                   ) : null}
                 </div>

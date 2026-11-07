@@ -979,7 +979,7 @@ export async function fillWaitlist(
   await releaseExpiredWaitlist(studioId);
   const filters = [
     eq(studioWaitlist.studioId, studioId),
-    gt(studioWaitlist.occursOn, today),
+    gte(studioWaitlist.occursOn, today),
   ];
   if (only) {
     filters.push(eq(studioWaitlist.occursOn, only.occursOn));
@@ -1047,6 +1047,12 @@ export async function fillWaitlist(
     for (const entry of entries) {
       const member = memberById.get(entry.clientUserId);
       if (!member || member.role !== "client") {
+        await db
+          .delete(studioWaitlist)
+          .where(eq(studioWaitlist.id, entry.id));
+        continue;
+      }
+      if (member.paymentStatus === "paused") {
         await db
           .delete(studioWaitlist)
           .where(eq(studioWaitlist.id, entry.id));
@@ -1520,6 +1526,9 @@ export async function enrollStudentWithCredit(
     )
     .limit(1);
   if (!member) throw new Error("Ese alumno no es de esta sucursal.");
+  if (member.paymentStatus === "paused") {
+    throw new Error("Esa cuenta está suspendida.");
+  }
   const [absences, recoveries, waits, existingRows] = await Promise.all([
     db
       .select({
@@ -2632,6 +2641,7 @@ export type GymClientSummary = {
   feeAmount: number | null;
   serviceEndsOn: string;
   lastPaidOn: string;
+  paymentStatus: ClientPaymentStatus;
   reservations: { weekday: number; slotStart: string }[];
 };
 
@@ -2736,6 +2746,14 @@ export async function listGymClients(): Promise<GymClientSummary[]> {
       feeAmount: item.feeAmount ?? null,
       serviceEndsOn: item.serviceEndsOn ?? "",
       lastPaidOn: item.lastPaidOn ?? "",
+      paymentStatus:
+        item.paymentStatus === "current" ||
+        item.paymentStatus === "overdue" ||
+        item.paymentStatus === "paused" ||
+        item.paymentStatus === "trial" ||
+        item.paymentStatus === "comp"
+          ? item.paymentStatus
+          : "current",
       reservations: reservations
         .filter(
           (row) =>
@@ -2759,6 +2777,9 @@ export type GymClientAccount = {
   studioName: string;
   teacherName: string | null;
   paymentStatus: ClientPaymentStatus;
+  /** El alumno avisó que pagó y falta confirmar. */
+  paymentClaimed: boolean;
+  paymentClaimedAt: string | null;
   serviceEndsOn: string;
   lastPaidOn: string;
   planName: string;
@@ -2821,6 +2842,10 @@ export async function listGymClientAccounts(): Promise<GymClientAccount[]> {
             ) ?? null)
           : null,
         paymentStatus,
+        paymentClaimed: Boolean(item.paymentClaimedAt),
+        paymentClaimedAt: item.paymentClaimedAt
+          ? item.paymentClaimedAt.toISOString()
+          : null,
         serviceEndsOn,
         lastPaidOn: item.lastPaidOn ?? "",
         planName: item.planName ?? "",
@@ -2831,10 +2856,11 @@ export async function listGymClientAccounts(): Promise<GymClientAccount[]> {
     })
     .sort((a, b) => {
       const rank = (row: GymClientAccount) => {
-        if (row.paymentStatus === "overdue" || row.alert === "expired") return 0;
-        if (row.alert === "due_soon") return 1;
-        if (row.paymentStatus === "paused") return 2;
-        return 3;
+        if (row.paymentClaimed) return 0;
+        if (row.paymentStatus === "overdue" || row.alert === "expired") return 1;
+        if (row.alert === "due_soon") return 2;
+        if (row.paymentStatus === "paused") return 3;
+        return 4;
       };
       return (
         rank(a) - rank(b) ||
@@ -2883,6 +2909,107 @@ async function recordStudioPayment(input: {
   });
 }
 
+/**
+ * Libera turnos futuros del alumno y asigna el primero de la lista de espera
+ * en cada horario liberado. No borra la plantilla semanal.
+ */
+async function releaseClientFutureTurns(
+  studioId: string,
+  clientUserId: string
+) {
+  const today = todayBillingYmd();
+  const db = getDb();
+  const turns = await db
+    .select({
+      id: studioMonthTurns.id,
+      occursOn: studioMonthTurns.occursOn,
+      slotStart: studioMonthTurns.slotStart,
+    })
+    .from(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, studioId),
+        eq(studioMonthTurns.clientUserId, clientUserId),
+        gte(studioMonthTurns.occursOn, today),
+        eq(studioMonthTurns.status, "scheduled")
+      )
+    );
+  const slots = [
+    ...new Map(
+      turns.map((item) => [
+        `${item.occursOn}|${item.slotStart}`,
+        { occursOn: item.occursOn, slotStart: item.slotStart },
+      ])
+    ).values(),
+  ];
+  if (turns.length) {
+    await db
+      .delete(studioMonthTurns)
+      .where(
+        inArray(
+          studioMonthTurns.id,
+          turns.map((item) => item.id)
+        )
+      );
+  }
+  await db
+    .delete(studioWaitlist)
+    .where(
+      and(
+        eq(studioWaitlist.studioId, studioId),
+        eq(studioWaitlist.clientUserId, clientUserId),
+        gte(studioWaitlist.occursOn, today)
+      )
+    );
+  for (const slot of slots) {
+    await fillWaitlist(studioId, slot);
+  }
+  return slots.length;
+}
+
+/** Suspende al alumno: libera turnos y pasa el primero de la lista de espera. */
+export async function suspendStudioClient(input: {
+  studioId: string;
+  clientUserId: string;
+}) {
+  const { studio, member } = await loadOwnedClientMember(
+    input.studioId,
+    input.clientUserId
+  );
+  if (member.paymentStatus === "paused") {
+    throw new Error("Esa cuenta ya está suspendida.");
+  }
+  await getDb()
+    .update(studioMemberships)
+    .set({
+      paymentStatus: "paused",
+      paymentClaimedAt: null,
+    })
+    .where(eq(studioMemberships.id, member.id));
+  const freed = await releaseClientFutureTurns(studio.id, member.userId);
+  return { freedSlots: freed };
+}
+
+/** Reactiva una cuenta suspendida y vuelve a armar los turnos fijos. */
+export async function reactivateStudioClient(input: {
+  studioId: string;
+  clientUserId: string;
+}) {
+  const { studio, member } = await loadOwnedClientMember(
+    input.studioId,
+    input.clientUserId
+  );
+  if (member.paymentStatus !== "paused") {
+    throw new Error("Esa cuenta no está suspendida.");
+  }
+  await getDb()
+    .update(studioMemberships)
+    .set({ paymentStatus: "current" })
+    .where(eq(studioMemberships.id, member.id));
+  await syncFixedMonthTurns(studio.id, member.userId);
+  return { ok: true as const };
+}
+
 export async function updateGymClientAccount(input: {
   studioId: string;
   clientUserId: string;
@@ -2903,6 +3030,7 @@ export async function updateGymClientAccount(input: {
   const planName = input.planName.trim().slice(0, 80);
   const feeAmount = parseFeeAmount(input.feeAmount);
   const billingNotes = input.billingNotes.trim().slice(0, 500);
+  const wasPaused = member.paymentStatus === "paused";
   await getDb()
     .update(studioMemberships)
     .set({
@@ -2912,8 +3040,18 @@ export async function updateGymClientAccount(input: {
       planName,
       feeAmount,
       billingNotes,
+      ...(paymentStatus === "current" ||
+      paymentStatus === "paused" ||
+      paymentStatus === "comp"
+        ? { paymentClaimedAt: null }
+        : {}),
     })
     .where(eq(studioMemberships.id, member.id));
+  if (paymentStatus === "paused" && !wasPaused) {
+    await releaseClientFutureTurns(studio.id, member.userId);
+  } else if (wasPaused && paymentStatus !== "paused") {
+    await syncFixedMonthTurns(studio.id, member.userId);
+  }
   const rows = await listGymClientAccounts();
   return rows.find(
     (item) => item.userId === member.userId && item.studioId === studio.id
@@ -2944,6 +3082,7 @@ export async function markGymClientPaid(input: {
       lastPaidOn: renewed.lastPaidOn,
       serviceEndsOn: renewed.serviceEndsOn,
       planName: plan,
+      paymentClaimedAt: null,
     })
     .where(eq(studioMemberships.id, member.id));
   await recordStudioPayment({
@@ -2954,6 +3093,28 @@ export async function markGymClientPaid(input: {
     planName: plan,
     note: "Renovación",
   });
+  const rows = await listGymClientAccounts();
+  return rows.find(
+    (item) => item.userId === member.userId && item.studioId === studio.id
+  )!;
+}
+
+/** El estudio rechaza el aviso de pago: el alumno vuelve a ver el mensaje en rojo. */
+export async function rejectGymClientPaymentClaim(input: {
+  studioId: string;
+  clientUserId: string;
+}) {
+  const { studio, member } = await loadOwnedClientMember(
+    input.studioId,
+    input.clientUserId
+  );
+  if (!member.paymentClaimedAt) {
+    throw new Error("Ese alumno no avisó un pago pendiente.");
+  }
+  await getDb()
+    .update(studioMemberships)
+    .set({ paymentClaimedAt: null })
+    .where(eq(studioMemberships.id, member.id));
   const rows = await listGymClientAccounts();
   return rows.find(
     (item) => item.userId === member.userId && item.studioId === studio.id
@@ -4850,10 +5011,19 @@ export async function loadClientBooking() {
         : []
     )
   );
+  const paymentStatus: ClientPaymentStatus =
+    member.paymentStatus === "current" ||
+    member.paymentStatus === "overdue" ||
+    member.paymentStatus === "paused" ||
+    member.paymentStatus === "trial" ||
+    member.paymentStatus === "comp"
+      ? member.paymentStatus
+      : "current";
   return {
     studio: bundle.studio,
     sessionsPerWeek: member.sessionsPerWeek ?? 1,
     turnPlan,
+    paymentStatus,
     activities,
     teacher: teacher
       ? { userId: teacher.userId as string, name: teacher.displayName }
@@ -5218,6 +5388,9 @@ export async function joinWaitlist(occursOn: string, slotStart: string) {
   }
   const booking = await loadClientBooking();
   if (!booking) throw new Error("No hay un gimnasio vinculado.");
+  if (booking.paymentStatus === "paused") {
+    throw new Error("Tu cuenta está suspendida. Consultá en recepción.");
+  }
   const userId = await requireUserId();
   if (booking.turnPlan === "fixed") {
     await assertFixedDayMove(booking.studio.id, userId, ymd);
@@ -5503,6 +5676,130 @@ export async function listStudioAbsences(
   );
 }
 
+export type GymAbsenceRankingRow = {
+  userId: string;
+  displayName: string;
+  studioId: string;
+  studioName: string;
+  teacherName: string | null;
+  /** Veces que el profesor marcó que no asistió este mes. */
+  absenceCount: number;
+  dates: string[];
+};
+
+/** Alumnos con al menos una inasistencia marcada por el profesor este mes. */
+export async function listGymAbsenceRanking(
+  studioId?: string | null
+): Promise<{
+  month: string;
+  monthLabel: string;
+  rows: GymAbsenceRankingRow[];
+  studios: { id: string; name: string }[];
+}> {
+  const { branches } = await requireOwnedGym();
+  const studios = branches.map((item) => ({
+    id: item.id,
+    name: item.name,
+  }));
+  if (!branches.length) {
+    const today = todayBillingYmd();
+    return {
+      month: today.slice(0, 7),
+      monthLabel: "",
+      rows: [],
+      studios: [],
+    };
+  }
+  const filterId = studioId?.trim() || "";
+  const studioIds = filterId
+    ? branches.filter((item) => item.id === filterId).map((item) => item.id)
+    : branches.map((item) => item.id);
+  if (!studioIds.length) {
+    throw new Error("Esa sucursal no es tuya.");
+  }
+  const today = todayBillingYmd();
+  const month = today.slice(0, 7);
+  const fromYmd = `${month}-01`;
+  let monthEnd = `${month}-28`;
+  for (let day = 28; day <= 31; day += 1) {
+    const candidate = `${month}-${String(day).padStart(2, "0")}`;
+    if (candidate.slice(0, 7) !== month) break;
+    monthEnd = candidate;
+  }
+  const db = getDb();
+  const [turns, members] = await Promise.all([
+    db
+      .select()
+      .from(studioMonthTurns)
+      .where(
+        and(
+          inArray(studioMonthTurns.studioId, studioIds),
+          gte(studioMonthTurns.occursOn, fromYmd),
+          lte(studioMonthTurns.occursOn, monthEnd),
+          eq(studioMonthTurns.attendance, "absent")
+        )
+      ),
+    db
+      .select()
+      .from(studioMemberships)
+      .where(inArray(studioMemberships.studioId, studioIds)),
+  ]);
+  const nameByMember = new Map(
+    members.map(
+      (item) => [`${item.studioId}:${item.userId}`, item.displayName] as const
+    )
+  );
+  const studioNameById = new Map(studios.map((item) => [item.id, item.name]));
+  const byClient = new Map<string, GymAbsenceRankingRow>();
+  for (const turn of turns) {
+    const key = `${turn.studioId}:${turn.clientUserId}`;
+    const teacherName = turn.teacherUserId
+      ? nameByMember.get(`${turn.studioId}:${turn.teacherUserId}`) ?? null
+      : null;
+    const current = byClient.get(key);
+    if (current) {
+      if (!current.dates.includes(turn.occursOn)) {
+        current.dates.push(turn.occursOn);
+        current.absenceCount = current.dates.length;
+      }
+      if (!current.teacherName && teacherName) {
+        current.teacherName = teacherName;
+      }
+      continue;
+    }
+    byClient.set(key, {
+      userId: turn.clientUserId,
+      displayName:
+        nameByMember.get(`${turn.studioId}:${turn.clientUserId}`) ?? "Alumno",
+      studioId: turn.studioId,
+      studioName: studioNameById.get(turn.studioId) ?? "Sucursal",
+      teacherName,
+      absenceCount: 1,
+      dates: [turn.occursOn],
+    });
+  }
+  const rows = [...byClient.values()]
+    .map((item) => ({
+      ...item,
+      dates: [...item.dates].sort(),
+    }))
+    .sort(
+      (a, b) =>
+        b.absenceCount - a.absenceCount ||
+        a.displayName.localeCompare(b.displayName, "es")
+    );
+  const monthLabel = new Intl.DateTimeFormat("es-AR", {
+    month: "long",
+    year: "numeric",
+  }).format(new Date(`${month}-15T12:00:00`));
+  return {
+    month,
+    monthLabel: monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1),
+    rows,
+    studios,
+  };
+}
+
 /** Ausencias de alumnos del profesor (hoy y próximos días). */
 export async function listTeacherClientAbsences(): Promise<
   StudioAbsenceView[]
@@ -5548,6 +5845,8 @@ export type ClientBillingHome = {
   serviceEndsOn: string;
   paymentStatus: ClientPaymentStatus;
   alert: ClientAccountAlert;
+  /** Avisó que pagó y el estudio todavía no lo confirmó. */
+  paymentClaimed: boolean;
 };
 
 /** Estado de cuota para el home del alumno de gimnasio. */
@@ -5572,7 +5871,40 @@ export async function loadClientBillingHome(): Promise<ClientBillingHome | null>
     serviceEndsOn,
     paymentStatus,
     alert: clientAccountAlert(paymentStatus, serviceEndsOn),
+    paymentClaimed: Boolean(member.paymentClaimedAt),
   };
+}
+
+/** El alumno avisa que ya pagó la cuota vencida. */
+export async function claimClientPayment() {
+  const userId = await requireUserId();
+  const member = await membershipFor(userId, "client");
+  if (!member || member.role !== "client") {
+    throw new Error("No hay un gimnasio vinculado.");
+  }
+  const paymentStatus: ClientPaymentStatus =
+    member.paymentStatus === "current" ||
+    member.paymentStatus === "overdue" ||
+    member.paymentStatus === "paused" ||
+    member.paymentStatus === "trial" ||
+    member.paymentStatus === "comp"
+      ? member.paymentStatus
+      : "current";
+  const alert = clientAccountAlert(
+    paymentStatus,
+    member.serviceEndsOn ?? ""
+  );
+  if (paymentStatus !== "overdue" && alert !== "expired") {
+    throw new Error("Tu cuota no figura vencida.");
+  }
+  if (member.paymentClaimedAt) {
+    return loadClientBillingHome();
+  }
+  await getDb()
+    .update(studioMemberships)
+    .set({ paymentClaimedAt: new Date() })
+    .where(eq(studioMemberships.id, member.id));
+  return loadClientBillingHome();
 }
 
 export type ClientProfile = {
@@ -6167,6 +6499,338 @@ export async function loadTeacherStudioHours(): Promise<TeacherStudioHours[]> {
   });
 }
 
+export type TeacherSlotAttendance = "present" | "absent";
+
+export type TeacherDaySlotStudent = {
+  userId: string;
+  displayName: string;
+  turnId: string | null;
+  /** El alumno avisó que no asiste. */
+  clientAbsent: boolean;
+  /** Asistencia marcada por el profesor (solo turnos pasados). */
+  attendance: TeacherSlotAttendance | null;
+};
+
+export type TeacherDaySlot = {
+  studioId: string;
+  studioName: string;
+  slotStart: string;
+  students: TeacherDaySlotStudent[];
+};
+
+export type TeacherDayAgenda = {
+  occursOn: string;
+  weekday: number;
+  slots: TeacherDaySlot[];
+};
+
+/** Turnos por hora del día para el profesor (según sus turnos de sucursal). */
+export async function loadTeacherDayAgenda(
+  occursOn: string
+): Promise<TeacherDayAgenda> {
+  const ymd = occursOn.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  const weekday = new Date(`${ymd}T12:00:00`).getDay();
+  const userId = await requireUserId();
+  const members = (await membershipsFor(userId)).filter(
+    (item) => item.role === "teacher"
+  );
+  if (!members.length) {
+    return { occursOn: ymd, weekday, slots: [] };
+  }
+  const studioIds = members.map((item) => item.studioId);
+  const useMonthTurns = isInMonthTurnWindow(ymd);
+  if (useMonthTurns) {
+    await Promise.all(studioIds.map((id) => syncFixedMonthTurns(id)));
+  }
+  const db = getDb();
+  const [studioRows, shifts, assignedClients, reservations, turns] =
+    await Promise.all([
+      db.select().from(studios).where(inArray(studios.id, studioIds)),
+      db
+        .select()
+        .from(studioTeacherShifts)
+        .where(
+          and(
+            inArray(studioTeacherShifts.studioId, studioIds),
+            eq(studioTeacherShifts.teacherUserId, userId),
+            eq(studioTeacherShifts.weekday, weekday)
+          )
+        ),
+      db
+        .select({
+          studioId: studioMemberships.studioId,
+          userId: studioMemberships.userId,
+          displayName: studioMemberships.displayName,
+        })
+        .from(studioMemberships)
+        .where(
+          and(
+            inArray(studioMemberships.studioId, studioIds),
+            eq(studioMemberships.role, "client"),
+            eq(studioMemberships.assignedTeacherUserId, userId)
+          )
+        ),
+      useMonthTurns
+        ? Promise.resolve([] as (typeof studioReservations.$inferSelect)[])
+        : db
+            .select()
+            .from(studioReservations)
+            .where(
+              and(
+                inArray(studioReservations.studioId, studioIds),
+                eq(studioReservations.weekday, weekday)
+              )
+            ),
+      useMonthTurns
+        ? db
+            .select()
+            .from(studioMonthTurns)
+            .where(
+              and(
+                inArray(studioMonthTurns.studioId, studioIds),
+                eq(studioMonthTurns.occursOn, ymd)
+              )
+            )
+        : Promise.resolve([] as (typeof studioMonthTurns.$inferSelect)[]),
+    ]);
+  const nameByStudio = new Map(
+    studioRows.map((item) => [item.id, item.name] as const)
+  );
+  const assignedByStudio = new Map<string, Set<string>>();
+  const nameByClient = new Map<string, string>();
+  for (const client of assignedClients) {
+    const set = assignedByStudio.get(client.studioId) ?? new Set<string>();
+    set.add(client.userId);
+    assignedByStudio.set(client.studioId, set);
+    nameByClient.set(`${client.studioId}:${client.userId}`, client.displayName);
+  }
+  for (const turn of turns) {
+    if (!nameByClient.has(`${turn.studioId}:${turn.clientUserId}`)) {
+      nameByClient.set(
+        `${turn.studioId}:${turn.clientUserId}`,
+        "Alumno"
+      );
+    }
+  }
+  if (turns.length || !useMonthTurns) {
+    const extraIds = [
+      ...new Set(
+        [
+          ...turns.map((item) => item.clientUserId),
+          ...reservations.map((item) => item.clientUserId),
+        ].filter(
+          (id) =>
+            ![...nameByClient.keys()].some((key) => key.endsWith(`:${id}`))
+        )
+      ),
+    ];
+    if (extraIds.length) {
+      const extraMembers = await db
+        .select({
+          studioId: studioMemberships.studioId,
+          userId: studioMemberships.userId,
+          displayName: studioMemberships.displayName,
+        })
+        .from(studioMemberships)
+        .where(
+          and(
+            inArray(studioMemberships.studioId, studioIds),
+            inArray(studioMemberships.userId, extraIds),
+            eq(studioMemberships.role, "client")
+          )
+        );
+      for (const item of extraMembers) {
+        nameByClient.set(
+          `${item.studioId}:${item.userId}`,
+          item.displayName || "Alumno"
+        );
+      }
+    }
+  }
+
+  type RawStudent = {
+    userId: string;
+    displayName: string;
+    turnId: string | null;
+    clientAbsent: boolean;
+    attendance: TeacherSlotAttendance | null;
+    teacherUserId: string | null;
+  };
+
+  const studentsByKey = new Map<string, RawStudent[]>();
+  const pushStudent = (
+    studioId: string,
+    slotStart: string,
+    student: RawStudent
+  ) => {
+    const assigned = assignedByStudio.get(studioId);
+    const mine =
+      student.teacherUserId === userId ||
+      Boolean(assigned?.has(student.userId));
+    if (!mine) return;
+    const key = `${studioId}:${slotStart}`;
+    const list = studentsByKey.get(key) ?? [];
+    if (list.some((item) => item.userId === student.userId)) return;
+    list.push(student);
+    studentsByKey.set(key, list);
+  };
+
+  if (useMonthTurns) {
+    for (const turn of turns) {
+      const attendance =
+        turn.attendance === "present" || turn.attendance === "absent"
+          ? turn.attendance
+          : null;
+      pushStudent(turn.studioId, turn.slotStart, {
+        userId: turn.clientUserId,
+        displayName:
+          nameByClient.get(`${turn.studioId}:${turn.clientUserId}`) ??
+          "Alumno",
+        turnId: turn.id,
+        clientAbsent: turn.status === "absent",
+        attendance,
+        teacherUserId: turn.teacherUserId,
+      });
+    }
+  } else {
+    const absences = await db
+      .select({
+        studioId: studioAbsences.studioId,
+        clientUserId: studioAbsences.clientUserId,
+      })
+      .from(studioAbsences)
+      .where(
+        and(
+          inArray(studioAbsences.studioId, studioIds),
+          eq(studioAbsences.absentOn, ymd)
+        )
+      );
+    const absentKeys = new Set(
+      absences.map((item) => `${item.studioId}:${item.clientUserId}`)
+    );
+    for (const row of reservations) {
+      pushStudent(row.studioId, row.slotStart, {
+        userId: row.clientUserId,
+        displayName:
+          nameByClient.get(`${row.studioId}:${row.clientUserId}`) ?? "Alumno",
+        turnId: null,
+        clientAbsent: absentKeys.has(`${row.studioId}:${row.clientUserId}`),
+        attendance: null,
+        teacherUserId: row.teacherUserId,
+      });
+    }
+  }
+
+  const slots: TeacherDaySlot[] = [];
+  for (const shift of shifts) {
+    const hours = hourSlots(shift.startHour, shift.endHour);
+    for (const slotStart of hours) {
+      const students = (studentsByKey.get(`${shift.studioId}:${slotStart}`) ?? [])
+        .map((item) => ({
+          userId: item.userId,
+          displayName: item.displayName,
+          turnId: item.turnId,
+          clientAbsent: item.clientAbsent,
+          attendance: item.attendance,
+        }))
+        .sort((a, b) => {
+          if (a.clientAbsent !== b.clientAbsent) return a.clientAbsent ? 1 : -1;
+          return a.displayName.localeCompare(b.displayName, "es");
+        });
+      slots.push({
+        studioId: shift.studioId,
+        studioName: nameByStudio.get(shift.studioId) ?? "Sucursal",
+        slotStart,
+        students,
+      });
+    }
+  }
+  slots.sort(
+    (a, b) =>
+      a.slotStart.localeCompare(b.slotStart) ||
+      a.studioName.localeCompare(b.studioName, "es")
+  );
+  return { occursOn: ymd, weekday, slots };
+}
+
+/** El profesor marca asistencia de un alumno en un turno ya pasado. */
+export async function markTeacherStudentAttendance(input: {
+  studioId: string;
+  clientUserId: string;
+  occursOn: string;
+  slotStart: string;
+  attendance: TeacherSlotAttendance;
+}) {
+  const ymd = input.occursOn.trim();
+  const hour = input.slotStart.trim();
+  const clientUserId = input.clientUserId.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+    throw new Error("Esa fecha no es válida.");
+  }
+  if (parseHour(hour) == null) {
+    throw new Error("Ese horario no es válido.");
+  }
+  if (input.attendance !== "present" && input.attendance !== "absent") {
+    throw new Error("Indicá si vino o no.");
+  }
+  if (!classSlotPassed(ymd, hour)) {
+    throw new Error("Todavía podés marcar asistencia cuando termine la clase.");
+  }
+  const userId = await requireUserId();
+  const members = (await membershipsFor(userId)).filter(
+    (item) => item.role === "teacher" && item.studioId === input.studioId
+  );
+  if (!members.length) {
+    throw new Error("No das clases en esa sucursal.");
+  }
+  if (!isInMonthTurnWindow(ymd)) {
+    throw new Error("Ese día ya no está en la agenda de turnos.");
+  }
+  await syncFixedMonthTurns(input.studioId, clientUserId);
+  const db = getDb();
+  const [turn] = await db
+    .select()
+    .from(studioMonthTurns)
+    .where(
+      and(
+        eq(studioMonthTurns.studioId, input.studioId),
+        eq(studioMonthTurns.clientUserId, clientUserId),
+        eq(studioMonthTurns.occursOn, ymd),
+        eq(studioMonthTurns.slotStart, hour)
+      )
+    )
+    .limit(1);
+  if (!turn) {
+    throw new Error("Ese alumno no tenía turno en ese horario.");
+  }
+  const [assigned] = await db
+    .select({ id: studioMemberships.id })
+    .from(studioMemberships)
+    .where(
+      and(
+        eq(studioMemberships.studioId, input.studioId),
+        eq(studioMemberships.userId, clientUserId),
+        eq(studioMemberships.role, "client"),
+        eq(studioMemberships.assignedTeacherUserId, userId)
+      )
+    )
+    .limit(1);
+  if (turn.teacherUserId !== userId && !assigned) {
+    throw new Error("Ese alumno no está en tu lista.");
+  }
+  await db
+    .update(studioMonthTurns)
+    .set({ attendance: input.attendance })
+    .where(eq(studioMonthTurns.id, turn.id));
+  return {
+    turnId: turn.id,
+    attendance: input.attendance,
+  };
+}
+
 export async function saveClientReservations(
   picks: { weekday: number; slotStart: string }[]
 ) {
@@ -6174,6 +6838,9 @@ export async function saveClientReservations(
   const member = await membershipFor(userId, "client");
   if (!member || member.role !== "client") {
     throw new Error("No tienes un cupo de alumno en un gimnasio.");
+  }
+  if (member.paymentStatus === "paused") {
+    throw new Error("Tu cuenta está suspendida. Consultá en recepción.");
   }
   const turnPlan = parseTurnPlan(member.turnPlan);
   if (turnPlan === "fixed") {

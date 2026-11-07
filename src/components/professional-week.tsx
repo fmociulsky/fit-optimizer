@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, MapPin } from "lucide-react";
+import { toast } from "sonner";
 import { SiteHeader } from "@/components/site-header";
 import { useAppStore } from "@/components/app-provider";
+import { useNow } from "@/components/use-now";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,8 +15,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatHour, hourCovers, parseHour } from "@/lib/hours";
-import { WEEKDAYS, weekdayName, weekdayShort } from "@/lib/labels";
+import {
+  classSlotPassed,
+  formatHour,
+  isCurrentClassSlot,
+  parseHour,
+} from "@/lib/hours";
+import { WEEKDAYS, weekdayName } from "@/lib/labels";
 import {
   localNoon,
   monthCells,
@@ -23,11 +30,15 @@ import {
 } from "@/lib/agenda";
 import { formatBillingYmd, todayBillingYmd } from "@/lib/client-account";
 import {
-  listAssignedTeacherClients,
   listTeacherClientAbsences,
+  loadTeacherDayAgenda,
   loadTeacherStudioHours,
+  markTeacherStudentAttendance,
   type StudioAbsenceView,
-  type TeacherAssignedClient,
+  type TeacherDayAgenda,
+  type TeacherDaySlot,
+  type TeacherDaySlotStudent,
+  type TeacherSlotAttendance,
   type TeacherStudioHours,
 } from "@/lib/studio";
 import { cn } from "@/lib/utils";
@@ -38,13 +49,6 @@ function toYmd(date: Date) {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
-
-type DayBlock = {
-  studioId: string;
-  studioName: string;
-  startHour: string;
-  endHour: string;
-};
 
 function clock(value: string) {
   return value.replace(/^0(\d)/, "$1");
@@ -65,85 +69,28 @@ function slotLabel(slotStart: string) {
   return `${clock(formatHour(start))}–${clock(formatHour(start + 60))}`;
 }
 
-type DaySlot = { weekday: number; slotStart: string };
-
-type DayStudent = {
-  userId: string;
-  displayName: string;
-  slotStart: string;
-  schedule: DaySlot[];
-  absent: boolean;
-};
-
-function weekdayIndex(weekday: number) {
-  const index = WEEKDAYS.findIndex((day) => day.id === weekday);
-  return index === -1 ? WEEKDAYS.length : index;
-}
-
-function scheduleLine(slots: DaySlot[]) {
-  return [...slots]
-    .sort(
-      (a, b) =>
-        weekdayIndex(a.weekday) - weekdayIndex(b.weekday) ||
-        a.slotStart.localeCompare(b.slotStart)
-    )
-    .map((item) => `${weekdayShort(item.weekday)} ${slotLabel(item.slotStart)}`)
-    .join(" · ");
-}
-
-function studentsForShift(
-  clients: TeacherAssignedClient[],
-  block: DayBlock,
-  weekday: number,
-  dateYmd: string,
-  absences: StudioAbsenceView[]
-): DayStudent[] {
-  const absentIds = new Set(
-    absences
-      .filter(
-        (item) =>
-          item.studioId === block.studioId && item.absentOn === dateYmd
-      )
-      .map((item) => item.clientUserId)
-  );
-  const rows: DayStudent[] = [];
-  for (const client of clients) {
-    if (client.studioId !== block.studioId) continue;
-    const today = client.reservations.find(
-      (item) =>
-        item.weekday === weekday &&
-        hourCovers(block.startHour, block.endHour, item.slotStart)
-    );
-    if (!today) continue;
-    rows.push({
-      userId: client.userId,
-      displayName: client.displayName,
-      slotStart: today.slotStart,
-      schedule: client.reservations,
-      absent: absentIds.has(client.userId),
-    });
-  }
-  rows.sort(
-    (a, b) =>
-      Number(a.absent) - Number(b.absent) ||
-      a.slotStart.localeCompare(b.slotStart) ||
-      a.displayName.localeCompare(b.displayName, "es")
-  );
-  return rows;
+function slotKey(slot: Pick<TeacherDaySlot, "studioId" | "slotStart">) {
+  return `${slot.studioId}:${slot.slotStart}`;
 }
 
 export function ProfessionalWeek() {
   const { ready, account } = useAppStore();
+  const now = useNow();
   const [studioHours, setStudioHours] = useState<TeacherStudioHours[] | null>(
     null
   );
-  const [clients, setClients] = useState<TeacherAssignedClient[] | null>(null);
+  const [dayAgenda, setDayAgenda] = useState<TeacherDayAgenda | null>(null);
+  const [todayAgenda, setTodayAgenda] = useState<TeacherDayAgenda | null>(null);
   const [absences, setAbsences] = useState<StudioAbsenceView[]>([]);
   const [loadError, setLoadError] = useState("");
-  const [clientsError, setClientsError] = useState("");
+  const [agendaError, setAgendaError] = useState("");
   const [selected, setSelected] = useState(() => localNoon(new Date()));
   const [cursor, setCursor] = useState(() => localNoon(new Date()));
-  const [openBlock, setOpenBlock] = useState<DayBlock | null>(null);
+  const [openSlot, setOpenSlot] = useState<TeacherDaySlot | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  const selectedYmd = toYmd(selected);
+  const todayYmd = todayBillingYmd();
 
   useEffect(() => {
     if (!ready || account?.role !== "professional") return;
@@ -162,20 +109,6 @@ export function ProfessionalWeek() {
           setStudioHours([]);
         }
       });
-    void listAssignedTeacherClients()
-      .then((rows) => {
-        if (!cancelled) setClients(rows);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setClientsError(
-            error instanceof Error
-              ? error.message
-              : "No se pudieron cargar los alumnos."
-          );
-          setClients([]);
-        }
-      });
     void listTeacherClientAbsences()
       .then((rows) => {
         if (!cancelled) setAbsences(rows);
@@ -188,28 +121,45 @@ export function ProfessionalWeek() {
     };
   }, [account?.role, ready]);
 
-  const blocksByWeekday = useMemo(() => {
-    const map = new Map<number, DayBlock[]>();
-    for (const row of studioHours ?? []) {
-      for (const shift of row.shifts) {
-        const current = map.get(shift.weekday) ?? [];
-        current.push({
-          studioId: row.studio.id,
-          studioName: row.studio.name,
-          startHour: shift.startHour,
-          endHour: shift.endHour,
+  useEffect(() => {
+    if (!ready || account?.role !== "professional") return;
+    let cancelled = false;
+    setAgendaError("");
+    void loadTeacherDayAgenda(selectedYmd)
+      .then((agenda) => {
+        if (cancelled) return;
+        setDayAgenda(agenda);
+        if (selectedYmd === todayYmd) setTodayAgenda(agenda);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setAgendaError(
+          error instanceof Error
+            ? error.message
+            : "No se pudieron cargar los turnos del día."
+        );
+        setDayAgenda({ occursOn: selectedYmd, weekday: selected.getDay(), slots: [] });
+      });
+    if (selectedYmd !== todayYmd) {
+      void loadTeacherDayAgenda(todayYmd)
+        .then((agenda) => {
+          if (!cancelled) setTodayAgenda(agenda);
+        })
+        .catch(() => {
+          if (!cancelled) setTodayAgenda(null);
         });
-        map.set(shift.weekday, current);
-      }
     }
-    for (const blocks of map.values()) {
-      blocks.sort(
-        (a, b) =>
-          a.startHour.localeCompare(b.startHour) ||
-          a.studioName.localeCompare(b.studioName, "es")
-      );
+    return () => {
+      cancelled = true;
+    };
+  }, [account?.role, ready, selected, selectedYmd, todayYmd]);
+
+  const shiftWeekdays = useMemo(() => {
+    const set = new Set<number>();
+    for (const row of studioHours ?? []) {
+      for (const shift of row.shifts) set.add(shift.weekday);
     }
-    return map;
+    return set;
   }, [studioHours]);
 
   const year = cursor.getFullYear();
@@ -221,81 +171,120 @@ export function ProfessionalWeek() {
     const weeks = Math.max(1, Math.ceil((lastInMonth + 1) / 7));
     return dates.slice(0, weeks * 7);
   }, [month, year]);
-  const selectedBlocks = blocksByWeekday.get(selected.getDay()) ?? [];
-  const hasShifts = blocksByWeekday.size > 0;
+  const hasShifts = shiftWeekdays.size > 0;
 
   function choose(date: Date) {
     const next = localNoon(date);
     setSelected(next);
     setCursor(next);
-    setOpenBlock(null);
+    setOpenSlot(null);
   }
 
-  const selectedYmd = toYmd(selected);
-  const openStudents = openBlock
-    ? studentsForShift(
-        clients ?? [],
-        openBlock,
-        selected.getDay(),
+  function patchStudentAttendance(
+    occursOn: string,
+    studioId: string,
+    slotStart: string,
+    userId: string,
+    attendance: TeacherSlotAttendance,
+    turnId: string | null
+  ) {
+    const patch = (agenda: TeacherDayAgenda | null) => {
+      if (!agenda || agenda.occursOn !== occursOn) return agenda;
+      return {
+        ...agenda,
+        slots: agenda.slots.map((slot) => {
+          if (slot.studioId !== studioId || slot.slotStart !== slotStart) {
+            return slot;
+          }
+          return {
+            ...slot,
+            students: slot.students.map((student) =>
+              student.userId === userId
+                ? {
+                    ...student,
+                    attendance,
+                    turnId: turnId ?? student.turnId,
+                  }
+                : student
+            ),
+          };
+        }),
+      };
+    };
+    setDayAgenda((current) => patch(current));
+    setTodayAgenda((current) => patch(current));
+    setOpenSlot((current) => {
+      if (
+        !current ||
+        current.studioId !== studioId ||
+        current.slotStart !== slotStart
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        students: current.students.map((student) =>
+          student.userId === userId
+            ? { ...student, attendance, turnId: turnId ?? student.turnId }
+            : student
+        ),
+      };
+    });
+  }
+
+  async function markAttendance(
+    slot: TeacherDaySlot,
+    student: TeacherDaySlotStudent,
+    attendance: TeacherSlotAttendance
+  ) {
+    const key = `${slot.studioId}:${student.userId}:${slot.slotStart}:${attendance}`;
+    if (savingKey) return;
+    setSavingKey(key);
+    try {
+      const result = await markTeacherStudentAttendance({
+        studioId: slot.studioId,
+        clientUserId: student.userId,
+        occursOn: selectedYmd,
+        slotStart: slot.slotStart,
+        attendance,
+      });
+      patchStudentAttendance(
         selectedYmd,
-        absences
-      )
-    : [];
-  const todayYmd = todayBillingYmd();
+        slot.studioId,
+        slot.slotStart,
+        student.userId,
+        attendance,
+        result.turnId
+      );
+      toast.success(
+        attendance === "present"
+          ? `${student.displayName}: presente`
+          : `${student.displayName}: ausente`
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "No se pudo guardar la asistencia."
+      );
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  const nowSlot = useMemo(() => {
+    const slots = todayAgenda?.slots ?? [];
+    return (
+      slots.find((slot) =>
+        isCurrentClassSlot(todayYmd, slot.slotStart, now)
+      ) ?? null
+    );
+  }, [now, todayAgenda, todayYmd]);
+
   const todayAbsences = absences.filter((item) => item.absentOn === todayYmd);
   const upcomingAbsences = absences.filter(
     (item) => item.absentOn > todayYmd
   );
-
-  const shiftHome = useMemo(() => {
-    if (!studioHours?.length || clients === null) return null;
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const base = localNoon(now);
-    for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
-      const date = new Date(base);
-      date.setDate(base.getDate() + dayOffset);
-      const weekday = date.getDay();
-      const dateYmd = toYmd(date);
-      const blocks = blocksByWeekday.get(weekday) ?? [];
-      for (const block of blocks) {
-        if (dayOffset === 0) {
-          const end = parseHour(block.endHour);
-          if (end != null && end <= nowMinutes) continue;
-        }
-        const students = studentsForShift(
-          clients,
-          block,
-          weekday,
-          dateYmd,
-          absences
-        );
-        const absentCount = students.filter((item) => item.absent).length;
-        const presentCount = students.length - absentCount;
-        return {
-          block,
-          dayOffset,
-          weekday,
-          studentCount: students.length,
-          presentCount,
-          absentCount,
-          isCurrent:
-            dayOffset === 0 &&
-            (() => {
-              const start = parseHour(block.startHour);
-              const end = parseHour(block.endHour);
-              return (
-                start != null &&
-                end != null &&
-                nowMinutes >= start &&
-                nowMinutes < end
-              );
-            })(),
-        };
-      }
-    }
-    return null;
-  }, [absences, blocksByWeekday, clients, studioHours]);
 
   if (!ready || studioHours === null) {
     return (
@@ -304,6 +293,10 @@ export function ProfessionalWeek() {
       </div>
     );
   }
+
+  const openPast = openSlot
+    ? classSlotPassed(selectedYmd, openSlot.slotStart, now)
+    : false;
 
   return (
     <div className="min-h-svh bg-background">
@@ -316,42 +309,30 @@ export function ProfessionalWeek() {
           Tu agenda.
         </h1>
         <p className="mt-3 max-w-xl text-muted-foreground">
-          En qué sucursal estás cada día, y en qué horario.
+          El turno de ahora, los horarios del día y la asistencia de tus
+          alumnos.
         </p>
 
-        {shiftHome ? (
+        {nowSlot ? (
           <section className="mt-6 rounded-3xl border border-primary/25 bg-primary/8 px-5 py-5">
             <p className="text-sm font-medium tracking-wide text-primary uppercase">
-              {shiftHome.isCurrent
-                ? "Ahora"
-                : shiftHome.dayOffset === 0
-                  ? "Próximo hoy"
-                  : "Próximo turno"}
+              Ahora
             </p>
             <h2 className="mt-1 font-heading text-3xl tracking-tight italic sm:text-4xl">
-              {clock(shiftHome.block.startHour)}
-              <span className="text-muted-foreground">
-                –{clock(shiftHome.block.endHour)}
-              </span>
+              {slotLabel(nowSlot.slotStart)}
             </h2>
             <p className="mt-2 text-muted-foreground">
-              {shiftHome.block.studioName}
-              {shiftHome.dayOffset === 0
-                ? ""
-                : ` · ${weekdayName(shiftHome.weekday)}`}
+              {nowSlot.studioName}
               {" · "}
-              {shiftHome.studentCount === 0
-                ? "sin alumnos asignados"
-                : shiftHome.studentCount === 1
+              {nowSlot.students.length === 0
+                ? "sin alumnos"
+                : nowSlot.students.length === 1
                   ? "1 alumno"
-                  : `${shiftHome.studentCount} alumnos`}
-              {shiftHome.absentCount > 0
-                ? ` · ${shiftHome.absentCount} ${
-                    shiftHome.absentCount === 1 ? "avisó" : "avisaron"
-                  }`
-                : ""}
-              {shiftHome.studentCount > 0 && shiftHome.absentCount > 0
-                ? ` · ${shiftHome.presentCount} van`
+                  : `${nowSlot.students.length} alumnos`}
+              {nowSlot.students.filter((item) => item.clientAbsent).length > 0
+                ? ` · ${
+                    nowSlot.students.filter((item) => item.clientAbsent).length
+                  } avisó`
                 : ""}
             </p>
             <Button
@@ -360,10 +341,8 @@ export function ProfessionalWeek() {
               size="sm"
               className="mt-4"
               onClick={() => {
-                const date = new Date(today);
-                date.setDate(today.getDate() + shiftHome.dayOffset);
-                choose(date);
-                setOpenBlock(shiftHome.block);
+                choose(new Date());
+                setOpenSlot(nowSlot);
               }}
             >
               Ver alumnos
@@ -475,7 +454,7 @@ export function ProfessionalWeek() {
           </div>
           <div className="mt-1 grid grid-cols-7 gap-1">
             {cells.map((date) => {
-              const blocks = blocksByWeekday.get(date.getDay()) ?? [];
+              const hasShift = shiftWeekdays.has(date.getDay());
               const selectedDay = sameLocalDay(date, selected);
               const isToday = sameLocalDay(date, today);
               const inMonth = date.getMonth() === month;
@@ -483,14 +462,7 @@ export function ProfessionalWeek() {
                 WEEKDAYS.find((item) => item.id === date.getDay())?.full,
                 date.getDate(),
                 isToday ? "hoy" : null,
-                blocks.length
-                  ? blocks
-                      .map(
-                        (block) =>
-                          `${block.studioName} de ${clock(block.startHour)} a ${clock(block.endHour)}`
-                      )
-                      .join(", ")
-                  : "libre",
+                hasShift ? "con turnos" : "libre",
               ]
                 .filter(Boolean)
                 .join(", ");
@@ -516,7 +488,7 @@ export function ProfessionalWeek() {
                     {date.getDate()}
                   </span>
                   <span className="mt-1 flex h-3 items-center justify-center">
-                    {blocks.length > 0 ? (
+                    {hasShift ? (
                       <span
                         className={cn(
                           "size-1.5 rounded-full",
@@ -530,105 +502,227 @@ export function ProfessionalWeek() {
             })}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            El punto marca un día con sucursal. Tocá el día para ver el horario.
+            El punto marca un día con sucursal. Tocá el día para ver los turnos
+            por hora.
           </p>
         </section>
 
         <section className="mt-4 rounded-3xl border border-foreground/8 bg-card p-4 sm:p-5">
           <h2 className="font-heading text-2xl italic">{dayHeading(selected)}</h2>
-          {selectedBlocks.length === 0 ? (
+          {agendaError ? (
+            <p className="mt-3 text-sm text-muted-foreground">{agendaError}</p>
+          ) : dayAgenda === null ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Cargando turnos…
+            </p>
+          ) : dayAgenda.slots.length === 0 ? (
             <p className="mt-3 text-sm text-muted-foreground">Libre</p>
           ) : (
             <>
               <ul className="mt-4 flex flex-col gap-2">
-                {selectedBlocks.map((block) => (
-                  <li key={`${block.studioId}:${block.startHour}`}>
-                    <button
-                      type="button"
-                      onClick={() => setOpenBlock(block)}
-                      className="flex w-full items-center justify-between gap-3 rounded-xl bg-primary/8 px-3 py-3 text-left transition-colors hover:bg-primary/14"
-                    >
-                      <span className="min-w-0">
-                        <span className="block font-medium">
-                          {block.studioName}
+                {dayAgenda.slots.map((slot) => {
+                  const current = isCurrentClassSlot(
+                    selectedYmd,
+                    slot.slotStart,
+                    now
+                  );
+                  const past = classSlotPassed(
+                    selectedYmd,
+                    slot.slotStart,
+                    now
+                  );
+                  const absentCount = slot.students.filter(
+                    (item) => item.clientAbsent
+                  ).length;
+                  const markedCount = slot.students.filter(
+                    (item) => item.attendance
+                  ).length;
+                  return (
+                    <li key={slotKey(slot)}>
+                      <button
+                        type="button"
+                        onClick={() => setOpenSlot(slot)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition-colors",
+                          current
+                            ? "border border-primary/35 bg-primary/12 hover:bg-primary/16"
+                            : "bg-primary/8 hover:bg-primary/14"
+                        )}
+                      >
+                        <span className="min-w-0">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">
+                              {slotLabel(slot.slotStart)}
+                            </span>
+                            {current ? (
+                              <span className="rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
+                                Ahora
+                              </span>
+                            ) : null}
+                            {past ? (
+                              <span className="text-xs text-muted-foreground">
+                                Ya fue
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="mt-1 block text-sm text-muted-foreground">
+                            {slot.studioName}
+                            {" · "}
+                            {slot.students.length === 0
+                              ? "sin alumnos"
+                              : slot.students.length === 1
+                                ? "1 alumno"
+                                : `${slot.students.length} alumnos`}
+                            {absentCount > 0
+                              ? ` · ${absentCount} avisó`
+                              : ""}
+                            {past && slot.students.length > 0
+                              ? ` · ${markedCount}/${slot.students.length} asistencia`
+                              : ""}
+                          </span>
                         </span>
-                        <span className="mt-1 block text-sm text-muted-foreground">
-                          {clock(block.startHour)}–{clock(block.endHour)}
-                        </span>
-                      </span>
-                      <ChevronRight className="size-4 shrink-0 text-primary" />
-                    </button>
-                  </li>
-                ))}
+                        <ChevronRight className="size-4 shrink-0 text-primary" />
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
               <p className="mt-3 text-xs text-muted-foreground">
-                Tocá la sucursal para ver los alumnos y el horario de cada uno.
+                Tocá un horario para ver los alumnos
+                {selectedYmd <= todayYmd
+                  ? " y marcar asistencia en los turnos que ya pasaron"
+                  : ""}
+                .
               </p>
             </>
           )}
         </section>
 
         <Dialog
-          open={openBlock !== null}
+          open={openSlot !== null}
           onOpenChange={(next) => {
-            if (!next) setOpenBlock(null);
+            if (!next) setOpenSlot(null);
           }}
         >
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
-            {openBlock ? (
+            {openSlot ? (
               <>
                 <DialogHeader>
                   <DialogTitle className="font-heading text-2xl italic">
-                    {openBlock.studioName}
+                    {slotLabel(openSlot.slotStart)}
                   </DialogTitle>
                   <DialogDescription>
-                    {`${dayHeading(selected)} · ${clock(openBlock.startHour)}–${clock(openBlock.endHour)}`}
+                    {`${dayHeading(selected)} · ${openSlot.studioName}`}
+                    {openPast ? " · Ya fue" : ""}
                   </DialogDescription>
                 </DialogHeader>
-                {clients === null ? (
+                {openSlot.students.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
-                    Cargando alumnos…
-                  </p>
-                ) : clientsError ? (
-                  <p className="text-sm text-muted-foreground">{clientsError}</p>
-                ) : openStudents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Este día no tenés alumnos en este horario.
+                    Este horario no tenés alumnos.
                   </p>
                 ) : (
                   <>
                     <p className="text-sm text-muted-foreground">
-                      {openStudents.length === 1
+                      {openSlot.students.length === 1
                         ? "1 alumno"
-                        : `${openStudents.length} alumnos`}
+                        : `${openSlot.students.length} alumnos`}
+                      {openPast
+                        ? " · Marcá quién vino"
+                        : ""}
                     </p>
                     <ul className="divide-y divide-foreground/8 overflow-hidden rounded-2xl border border-foreground/8">
-                      {openStudents.map((student) => (
-                        <li key={student.userId}>
-                          <Link
-                            href={`/profesor/${encodeURIComponent(student.userId)}`}
-                            className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-muted/40"
-                          >
-                            <span className="min-w-0">
-                              <span
-                                className={cn(
-                                  "block font-medium",
-                                  student.absent &&
-                                    "text-muted-foreground line-through opacity-70"
-                                )}
+                      {openSlot.students.map((student) => {
+                        const savingPresent =
+                          savingKey ===
+                          `${openSlot.studioId}:${student.userId}:${openSlot.slotStart}:present`;
+                        const savingAbsent =
+                          savingKey ===
+                          `${openSlot.studioId}:${student.userId}:${openSlot.slotStart}:absent`;
+                        return (
+                          <li key={student.userId} className="px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <Link
+                                href={`/profesor/${encodeURIComponent(student.userId)}`}
+                                className="min-w-0 flex-1 transition-colors hover:text-primary"
                               >
-                                {student.displayName}
-                              </span>
-                              <span className="mt-1 block text-sm text-muted-foreground">
-                                {student.absent
-                                  ? `Avisó que no va · ${slotLabel(student.slotStart)}`
-                                  : scheduleLine(student.schedule)}
-                              </span>
-                            </span>
-                            <ChevronRight className="size-4 shrink-0 text-primary" />
-                          </Link>
-                        </li>
-                      ))}
+                                <span
+                                  className={cn(
+                                    "block font-medium",
+                                    student.clientAbsent &&
+                                      "text-muted-foreground line-through opacity-70"
+                                  )}
+                                >
+                                  {student.displayName}
+                                </span>
+                                <span className="mt-1 block text-sm text-muted-foreground">
+                                  {student.clientAbsent
+                                    ? "Avisó que no va"
+                                    : student.attendance === "present"
+                                      ? "Presente"
+                                      : student.attendance === "absent"
+                                        ? "Ausente"
+                                        : openPast
+                                          ? "Sin marcar"
+                                          : weekdayName(selected.getDay())}
+                                </span>
+                              </Link>
+                              <ChevronRight className="mt-1 size-4 shrink-0 text-primary" />
+                            </div>
+                            {openPast && !student.clientAbsent ? (
+                              <div className="mt-3 flex gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={
+                                    student.attendance === "present"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  className={cn(
+                                    "h-9 flex-1",
+                                    student.attendance === "present" &&
+                                      "bg-emerald-600 hover:bg-emerald-600"
+                                  )}
+                                  disabled={Boolean(savingKey)}
+                                  onClick={() =>
+                                    void markAttendance(
+                                      openSlot,
+                                      student,
+                                      "present"
+                                    )
+                                  }
+                                >
+                                  {savingPresent ? "…" : "Presente"}
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={
+                                    student.attendance === "absent"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  className={cn(
+                                    "h-9 flex-1",
+                                    student.attendance === "absent" &&
+                                      "bg-red-600 hover:bg-red-600"
+                                  )}
+                                  disabled={Boolean(savingKey)}
+                                  onClick={() =>
+                                    void markAttendance(
+                                      openSlot,
+                                      student,
+                                      "absent"
+                                    )
+                                  }
+                                >
+                                  {savingAbsent ? "…" : "Ausente"}
+                                </Button>
+                              </div>
+                            ) : null}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </>
                 )}

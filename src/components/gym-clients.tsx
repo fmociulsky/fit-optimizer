@@ -13,6 +13,7 @@ import {
   StudioClientForm,
   type StudioClientDraft,
 } from "@/components/studio-client-form";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { clientPlanSummary } from "@/lib/client-account";
 import { studioKindsLabel, WEEKDAYS } from "@/lib/labels";
@@ -22,6 +23,8 @@ import {
   listGymClients,
   listOwnedBranches,
   loadStudioDashboard,
+  reactivateStudioClient,
+  suspendStudioClient,
   type GymClientSummary,
   type StudioDashboard,
 } from "@/lib/studio";
@@ -146,6 +149,42 @@ export function GymClientsView() {
     }
   }
 
+  async function suspendClient(client: GymClientSummary) {
+    const ok = window.confirm(
+      `¿Suspender a ${client.displayName}? Se liberan sus turnos tomados y, si hay lista de espera, entra el primero.`
+    );
+    if (!ok) return;
+    try {
+      const result = await suspendStudioClient({
+        studioId: client.studioId,
+        clientUserId: client.userId,
+      });
+      await refreshClients();
+      toast.success(
+        result.freedSlots > 0
+          ? `Cuenta suspendida. Se liberaron ${result.freedSlots} ${
+              result.freedSlots === 1 ? "horario" : "horarios"
+            }.`
+          : "Cuenta suspendida."
+      );
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  }
+
+  async function reactivateClient(client: GymClientSummary) {
+    try {
+      await reactivateStudioClient({
+        studioId: client.studioId,
+        clientUserId: client.userId,
+      });
+      await refreshClients();
+      toast.success("Cuenta reactivada. Se volvieron a armar sus turnos fijos.");
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  }
+
   if (loadError) {
     return (
       <div className="flex min-h-svh items-center justify-center px-4 text-center text-muted-foreground">
@@ -257,9 +296,12 @@ export function GymClientsView() {
                 }}
               >
                 <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                  <p className="min-w-0 flex-1 truncate font-medium">
-                    {client.displayName}
-                  </p>
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                    <p className="truncate font-medium">{client.displayName}</p>
+                    {client.paymentStatus === "paused" ? (
+                      <Badge variant="secondary">Suspendido</Badge>
+                    ) : null}
+                  </div>
                   <p className="hidden min-w-0 max-w-[14rem] truncate text-sm text-muted-foreground sm:block">
                     {client.email || client.phone || "—"}
                   </p>
@@ -400,6 +442,25 @@ export function GymClientsView() {
                     >
                       Editar
                     </Button>
+                    {client.paymentStatus === "paused" ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 px-4"
+                        onClick={() => void reactivateClient(client)}
+                      >
+                        Reactivar
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 px-4"
+                        onClick={() => void suspendClient(client)}
+                      >
+                        Suspender
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="destructive"
