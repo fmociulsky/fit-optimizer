@@ -13,6 +13,7 @@ import {
   studioPayments,
   studioReservations,
   studioShiftRequests,
+  studioTeacherLeaves,
   studioTeacherShifts,
   studioWaitlist,
   studios,
@@ -744,6 +745,78 @@ function personFromMember(
   };
 }
 
+/** Profesor en licencia → reemplazo, para un día concreto de la sucursal. */
+async function teacherLeaveRemapForDay(studioId: string, occursOn: string) {
+  const [studio] = await getDb()
+    .select({ ownerUserId: studios.ownerUserId })
+    .from(studios)
+    .where(eq(studios.id, studioId))
+    .limit(1);
+  if (!studio) return new Map<string, string>();
+  const rows = await getDb()
+    .select({
+      teacherUserId: studioTeacherLeaves.teacherUserId,
+      replacementTeacherUserId: studioTeacherLeaves.replacementTeacherUserId,
+    })
+    .from(studioTeacherLeaves)
+    .where(
+      and(
+        eq(studioTeacherLeaves.ownerUserId, studio.ownerUserId),
+        eq(studioTeacherLeaves.status, "approved"),
+        lte(studioTeacherLeaves.startsOn, occursOn),
+        gte(studioTeacherLeaves.endsOn, occursOn)
+      )
+    );
+  const remap = new Map<string, string>();
+  for (const row of rows) {
+    if (row.replacementTeacherUserId) {
+      remap.set(row.teacherUserId, row.replacementTeacherUserId);
+    }
+  }
+  return remap;
+}
+
+/** Remplazos por licencia en un rango: clave `${occursOn}|${teacherUserId}`. */
+async function teacherLeaveRemapByDay(
+  studioId: string,
+  fromYmd: string,
+  toYmd: string
+) {
+  const [studio] = await getDb()
+    .select({ ownerUserId: studios.ownerUserId })
+    .from(studios)
+    .where(eq(studios.id, studioId))
+    .limit(1);
+  if (!studio) return new Map<string, string>();
+  const rows = await getDb()
+    .select({
+      teacherUserId: studioTeacherLeaves.teacherUserId,
+      replacementTeacherUserId: studioTeacherLeaves.replacementTeacherUserId,
+      startsOn: studioTeacherLeaves.startsOn,
+      endsOn: studioTeacherLeaves.endsOn,
+    })
+    .from(studioTeacherLeaves)
+    .where(
+      and(
+        eq(studioTeacherLeaves.ownerUserId, studio.ownerUserId),
+        eq(studioTeacherLeaves.status, "approved"),
+        lte(studioTeacherLeaves.startsOn, toYmd),
+        gte(studioTeacherLeaves.endsOn, fromYmd)
+      )
+    );
+  const remap = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.replacementTeacherUserId) continue;
+    let cursor = row.startsOn < fromYmd ? fromYmd : row.startsOn;
+    const last = row.endsOn > toYmd ? toYmd : row.endsOn;
+    while (cursor <= last) {
+      remap.set(`${cursor}|${row.teacherUserId}`, row.replacementTeacherUserId);
+      cursor = shiftYmd(cursor, 1);
+    }
+  }
+  return remap;
+}
+
 function attendanceForSlot(input: {
   weekday: number;
   slotStart: string;
@@ -755,19 +828,23 @@ function attendanceForSlot(input: {
     slotStart: string;
     absent: boolean;
   }[];
+  /** Profesor en licencia → reemplazo aprobado ese día. */
+  teacherRemap?: Map<string, string>;
 }): Omit<DayAgendaSlot, "slotStart"> {
+  const remap = (userId: string) =>
+    input.teacherRemap?.get(userId) ?? userId;
   const teacherIds = new Set<string>();
   for (const shift of input.shifts) {
     if (
       shift.weekday === input.weekday &&
       hourCovers(shift.startHour, shift.endHour, input.slotStart)
     ) {
-      teacherIds.add(shift.teacherUserId);
+      teacherIds.add(remap(shift.teacherUserId));
     }
   }
   const slotRows = input.rows.filter((item) => item.slotStart === input.slotStart);
   for (const row of slotRows) {
-    if (row.teacherUserId) teacherIds.add(row.teacherUserId);
+    if (row.teacherUserId) teacherIds.add(remap(row.teacherUserId));
   }
   const studentsByTeacher = new Map<string, NextHourPerson[]>();
   const unassignedStudents: NextHourPerson[] = [];
@@ -780,9 +857,10 @@ function attendanceForSlot(input: {
       unassignedStudents.push(student);
       continue;
     }
-    const list = studentsByTeacher.get(row.teacherUserId) ?? [];
+    const teacherId = remap(row.teacherUserId);
+    const list = studentsByTeacher.get(teacherId) ?? [];
     list.push(student);
-    studentsByTeacher.set(row.teacherUserId, list);
+    studentsByTeacher.set(teacherId, list);
   }
   const sortStudents = (list: NextHourPerson[]) =>
     list.sort((a, b) => {
@@ -866,6 +944,9 @@ export async function loadDayAgenda(
   ]);
   const memberById = new Map(members.map((item) => [item.userId, item]));
   const absentClientIds = new Set(absences.map((item) => item.clientUserId));
+  const teacherRemap = absentOn
+    ? await teacherLeaveRemapForDay(studio.id, absentOn)
+    : new Map<string, string>();
   const rows = useMonthTurns
     ? turns.map((item) => ({
         clientUserId: item.clientUserId,
@@ -888,6 +969,7 @@ export async function loadDayAgenda(
           members: memberById,
           shifts,
           rows,
+          teacherRemap,
         }),
       }))
     : [];
@@ -1285,6 +1367,7 @@ export async function loadWeekAgenda(studioId: string, weekStart?: string) {
           [item.userId, memberActivities(item.activities, studio.kinds)] as const
       )
   );
+  const remapsByDay = await teacherLeaveRemapByDay(studio.id, monday, sunday);
   const days: WeekAgendaDay[] = Array.from({ length: 7 }, (_, index) => {
     const occursOn = shiftYmd(monday, index);
     const weekday = new Date(`${occursOn}T12:00:00`).getDay();
@@ -1295,6 +1378,12 @@ export async function loadWeekAgenda(studioId: string, weekStart?: string) {
         .filter((item) => item.absentOn === occursOn)
         .map((item) => item.clientUserId)
     );
+    const teacherRemap = new Map<string, string>();
+    for (const [key, replacement] of remapsByDay) {
+      if (key.startsWith(`${occursOn}|`)) {
+        teacherRemap.set(key.slice(occursOn.length + 1), replacement);
+      }
+    }
     const rows = useMonth
       ? turns
           .filter((item) => item.occursOn === occursOn)
@@ -1323,6 +1412,7 @@ export async function loadWeekAgenda(studioId: string, weekStart?: string) {
               members: memberById,
               shifts,
               rows,
+              teacherRemap,
             }),
             ...roomForRows(studio, hours, slotRows, activitiesByClient),
             waiting: waitRows
@@ -4564,6 +4654,303 @@ export async function resolveShiftRequest(
   return listPendingShiftRequests();
 }
 
+export type TeacherLeaveView = {
+  id: string;
+  teacherUserId: string;
+  teacherName: string;
+  startsOn: string;
+  endsOn: string;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  replacementTeacherUserId: string | null;
+  replacementTeacherName: string | null;
+  note: string;
+  createdAt: string;
+};
+
+export type LeaveReplacementOption = {
+  userId: string;
+  displayName: string;
+};
+
+async function teacherGymOwnerId(teacherUserId: string) {
+  const db = getDb();
+  const [gymRow] = await db
+    .select({ ownerUserId: gymTeachers.ownerUserId })
+    .from(gymTeachers)
+    .where(eq(gymTeachers.userId, teacherUserId))
+    .limit(1);
+  if (gymRow) return gymRow.ownerUserId;
+  const members = await membershipsFor(teacherUserId);
+  const teacherStudios = members.filter((item) => item.role === "teacher");
+  if (!teacherStudios.length) return null;
+  const [studio] = await db
+    .select({ ownerUserId: studios.ownerUserId })
+    .from(studios)
+    .where(eq(studios.id, teacherStudios[0].studioId))
+    .limit(1);
+  return studio?.ownerUserId ?? null;
+}
+
+async function teacherLeaveViews(
+  rows: (typeof studioTeacherLeaves.$inferSelect)[]
+): Promise<TeacherLeaveView[]> {
+  if (!rows.length) return [];
+  const teacherIds = [
+    ...new Set(
+      rows.flatMap((item) =>
+        [item.teacherUserId, item.replacementTeacherUserId].filter(
+          (id): id is string => Boolean(id)
+        )
+      )
+    ),
+  ];
+  const gymRows = await getDb()
+    .select({
+      userId: gymTeachers.userId,
+      displayName: gymTeachers.displayName,
+      ownerUserId: gymTeachers.ownerUserId,
+    })
+    .from(gymTeachers)
+    .where(inArray(gymTeachers.userId, teacherIds));
+  const nameByUser = new Map(
+    gymRows.map((item) => [item.userId, item.displayName] as const)
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    teacherUserId: row.teacherUserId,
+    teacherName: nameByUser.get(row.teacherUserId) || "Profesor",
+    startsOn: row.startsOn,
+    endsOn: row.endsOn,
+    status: row.status,
+    replacementTeacherUserId: row.replacementTeacherUserId,
+    replacementTeacherName: row.replacementTeacherUserId
+      ? nameByUser.get(row.replacementTeacherUserId) || "Profesor"
+      : null,
+    note: row.note ?? "",
+    createdAt: row.createdAt.toISOString(),
+  }));
+}
+
+/** El profesor pide una licencia (desde–hasta). */
+export async function requestTeacherLeave(input: {
+  startsOn: string;
+  endsOn: string;
+  note?: string;
+}) {
+  const userId = await requireUserId();
+  const startsOn = input.startsOn.trim();
+  const endsOn = input.endsOn.trim();
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(startsOn) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(endsOn)
+  ) {
+    throw new Error("Esas fechas no son válidas.");
+  }
+  if (endsOn < startsOn) {
+    throw new Error("La fecha hasta no puede ser anterior al desde.");
+  }
+  const today = todayBillingYmd();
+  if (endsOn < today) throw new Error("Ese período ya pasó.");
+  if (startsOn < today) {
+    throw new Error("La licencia tiene que empezar hoy o después.");
+  }
+  let days = 0;
+  for (let cursor = startsOn; cursor <= endsOn; cursor = shiftYmd(cursor, 1)) {
+    days += 1;
+    if (days > 90) throw new Error("La licencia no puede superar 90 días.");
+  }
+  const ownerUserId = await teacherGymOwnerId(userId);
+  if (!ownerUserId) {
+    throw new Error("No estás vinculado a un gimnasio.");
+  }
+  const note = (input.note ?? "").trim().slice(0, 200);
+  const db = getDb();
+  const overlapping = await db
+    .select({ id: studioTeacherLeaves.id })
+    .from(studioTeacherLeaves)
+    .where(
+      and(
+        eq(studioTeacherLeaves.ownerUserId, ownerUserId),
+        eq(studioTeacherLeaves.teacherUserId, userId),
+        inArray(studioTeacherLeaves.status, ["pending", "approved"]),
+        lte(studioTeacherLeaves.startsOn, endsOn),
+        gte(studioTeacherLeaves.endsOn, startsOn)
+      )
+    )
+    .limit(1);
+  if (overlapping.length) {
+    throw new Error("Ya tenés una licencia que se solapa con esas fechas.");
+  }
+  await db.insert(studioTeacherLeaves).values({
+    id: uid(),
+    ownerUserId,
+    teacherUserId: userId,
+    startsOn,
+    endsOn,
+    status: "pending",
+    note,
+  });
+  return listOwnTeacherLeaves();
+}
+
+/** El profesor cancela una licencia todavía pendiente. */
+export async function cancelTeacherLeave(leaveId: string) {
+  const userId = await requireUserId();
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(studioTeacherLeaves)
+    .where(eq(studioTeacherLeaves.id, leaveId.trim()))
+    .limit(1);
+  if (!row || row.teacherUserId !== userId) {
+    throw new Error("No encontré esa licencia.");
+  }
+  if (row.status !== "pending") {
+    throw new Error("Esa licencia ya no se puede cancelar.");
+  }
+  await db
+    .update(studioTeacherLeaves)
+    .set({ status: "cancelled", resolvedAt: new Date() })
+    .where(eq(studioTeacherLeaves.id, row.id));
+  return listOwnTeacherLeaves();
+}
+
+/** Licencias del profesor logueado (pendientes y próximas confirmadas). */
+export async function listOwnTeacherLeaves(): Promise<TeacherLeaveView[]> {
+  const userId = await requireUserId();
+  const today = todayBillingYmd();
+  const rows = await getDb()
+    .select()
+    .from(studioTeacherLeaves)
+    .where(
+      and(
+        eq(studioTeacherLeaves.teacherUserId, userId),
+        gte(studioTeacherLeaves.endsOn, today),
+        inArray(studioTeacherLeaves.status, ["pending", "approved"])
+      )
+    )
+    .orderBy(asc(studioTeacherLeaves.startsOn));
+  return teacherLeaveViews(rows);
+}
+
+/** Licencias pendientes para el estudio. */
+export async function listPendingTeacherLeaves(): Promise<TeacherLeaveView[]> {
+  const { userId } = await requireOwnedGym();
+  const today = todayBillingYmd();
+  const rows = await getDb()
+    .select()
+    .from(studioTeacherLeaves)
+    .where(
+      and(
+        eq(studioTeacherLeaves.ownerUserId, userId),
+        eq(studioTeacherLeaves.status, "pending"),
+        gte(studioTeacherLeaves.endsOn, today)
+      )
+    )
+    .orderBy(asc(studioTeacherLeaves.startsOn));
+  return teacherLeaveViews(rows);
+}
+
+/** Otros profesores del gimnasio que pueden cubrir la licencia. */
+export async function listLeaveReplacementTeachers(
+  absentTeacherUserId: string
+): Promise<LeaveReplacementOption[]> {
+  const { userId } = await requireOwnedGym();
+  const rows = await getDb()
+    .select({
+      userId: gymTeachers.userId,
+      displayName: gymTeachers.displayName,
+    })
+    .from(gymTeachers)
+    .where(
+      and(
+        eq(gymTeachers.ownerUserId, userId),
+        eq(gymTeachers.active, true),
+        ne(gymTeachers.userId, absentTeacherUserId.trim())
+      )
+    );
+  return rows
+    .map((item) => ({
+      userId: item.userId,
+      displayName: item.displayName || "Profesor",
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "es"));
+}
+
+/** El estudio confirma o rechaza la licencia; si aprueba, elige reemplazo. */
+export async function resolveTeacherLeave(input: {
+  leaveId: string;
+  decision: "approved" | "rejected";
+  replacementTeacherUserId?: string | null;
+}) {
+  const { userId, branches } = await requireOwnedGym();
+  const db = getDb();
+  const [row] = await db
+    .select()
+    .from(studioTeacherLeaves)
+    .where(eq(studioTeacherLeaves.id, input.leaveId.trim()))
+    .limit(1);
+  if (!row || row.status !== "pending" || row.ownerUserId !== userId) {
+    throw new Error("Esa licencia ya no está pendiente.");
+  }
+  if (input.decision === "rejected") {
+    await db
+      .update(studioTeacherLeaves)
+      .set({
+        status: "rejected",
+        resolvedAt: new Date(),
+        replacementTeacherUserId: null,
+      })
+      .where(eq(studioTeacherLeaves.id, row.id));
+    return listPendingTeacherLeaves();
+  }
+  const replacementId = (input.replacementTeacherUserId ?? "").trim();
+  if (!replacementId) {
+    throw new Error("Elegí un profesor de reemplazo.");
+  }
+  if (replacementId === row.teacherUserId) {
+    throw new Error("El reemplazo tiene que ser otro profesor.");
+  }
+  const [replacement] = await db
+    .select({ id: gymTeachers.id })
+    .from(gymTeachers)
+    .where(
+      and(
+        eq(gymTeachers.ownerUserId, userId),
+        eq(gymTeachers.userId, replacementId),
+        eq(gymTeachers.active, true)
+      )
+    )
+    .limit(1);
+  if (!replacement) {
+    throw new Error("Ese profesor no está en el gimnasio.");
+  }
+  const studioIds = branches.map((item) => item.id);
+  await Promise.all(studioIds.map((id) => syncFixedMonthTurns(id)));
+  if (studioIds.length) {
+    await db
+      .update(studioMonthTurns)
+      .set({ teacherUserId: replacementId })
+      .where(
+        and(
+          inArray(studioMonthTurns.studioId, studioIds),
+          eq(studioMonthTurns.teacherUserId, row.teacherUserId),
+          gte(studioMonthTurns.occursOn, row.startsOn),
+          lte(studioMonthTurns.occursOn, row.endsOn)
+        )
+      );
+  }
+  await db
+    .update(studioTeacherLeaves)
+    .set({
+      status: "approved",
+      replacementTeacherUserId: replacementId,
+      resolvedAt: new Date(),
+    })
+    .where(eq(studioTeacherLeaves.id, row.id));
+  return listPendingTeacherLeaves();
+}
+
 export async function redeemStudioInvite(rawCode: string) {
   const userId = await requireUserId();
   const code = normalizeJoinCode(rawCode);
@@ -6549,7 +6936,17 @@ export async function loadTeacherDayAgenda(
     await Promise.all(studioIds.map((id) => syncFixedMonthTurns(id)));
   }
   const db = getDb();
-  const [studioRows, shifts, assignedClients, reservations, turns] =
+  const ownerIds = [
+    ...new Set(
+      (
+        await db
+          .select({ ownerUserId: studios.ownerUserId })
+          .from(studios)
+          .where(inArray(studios.id, studioIds))
+      ).map((item) => item.ownerUserId)
+    ),
+  ];
+  const [studioRows, ownShifts, dayLeaves, assignedClients, reservations, turns] =
     await Promise.all([
       db.select().from(studios).where(inArray(studios.id, studioIds)),
       db
@@ -6562,6 +6959,30 @@ export async function loadTeacherDayAgenda(
             eq(studioTeacherShifts.weekday, weekday)
           )
         ),
+      ownerIds.length
+        ? db
+            .select({
+              ownerUserId: studioTeacherLeaves.ownerUserId,
+              teacherUserId: studioTeacherLeaves.teacherUserId,
+              replacementTeacherUserId:
+                studioTeacherLeaves.replacementTeacherUserId,
+            })
+            .from(studioTeacherLeaves)
+            .where(
+              and(
+                inArray(studioTeacherLeaves.ownerUserId, ownerIds),
+                eq(studioTeacherLeaves.status, "approved"),
+                lte(studioTeacherLeaves.startsOn, ymd),
+                gte(studioTeacherLeaves.endsOn, ymd)
+              )
+            )
+        : Promise.resolve(
+            [] as {
+              ownerUserId: string;
+              teacherUserId: string;
+              replacementTeacherUserId: string | null;
+            }[]
+          ),
       db
         .select({
           studioId: studioMemberships.studioId,
@@ -6599,6 +7020,50 @@ export async function loadTeacherDayAgenda(
             )
         : Promise.resolve([] as (typeof studioMonthTurns.$inferSelect)[]),
     ]);
+  const ownerByStudio = new Map(
+    studioRows.map((item) => [item.id, item.ownerUserId] as const)
+  );
+  const onLeaveStudioIds = new Set(
+    studioIds.filter((studioId) => {
+      const ownerId = ownerByStudio.get(studioId);
+      return dayLeaves.some(
+        (leave) =>
+          leave.teacherUserId === userId && leave.ownerUserId === ownerId
+      );
+    })
+  );
+  const coveringForByStudio = new Map<string, Set<string>>();
+  for (const leave of dayLeaves) {
+    if (leave.replacementTeacherUserId !== userId) continue;
+    for (const studioId of studioIds) {
+      if (ownerByStudio.get(studioId) !== leave.ownerUserId) continue;
+      const set = coveringForByStudio.get(studioId) ?? new Set<string>();
+      set.add(leave.teacherUserId);
+      coveringForByStudio.set(studioId, set);
+    }
+  }
+  const coverTeacherIds = [
+    ...new Set([...coveringForByStudio.values()].flatMap((set) => [...set])),
+  ];
+  const coverShifts =
+    coverTeacherIds.length === 0
+      ? ([] as (typeof studioTeacherShifts.$inferSelect)[])
+      : await db
+          .select()
+          .from(studioTeacherShifts)
+          .where(
+            and(
+              inArray(studioTeacherShifts.studioId, studioIds),
+              inArray(studioTeacherShifts.teacherUserId, coverTeacherIds),
+              eq(studioTeacherShifts.weekday, weekday)
+            )
+          );
+  const shifts = [
+    ...ownShifts.filter((shift) => !onLeaveStudioIds.has(shift.studioId)),
+    ...coverShifts.filter((shift) =>
+      coveringForByStudio.get(shift.studioId)?.has(shift.teacherUserId)
+    ),
+  ];
   const nameByStudio = new Map(
     studioRows.map((item) => [item.id, item.name] as const)
   );
@@ -6669,9 +7134,14 @@ export async function loadTeacherDayAgenda(
     slotStart: string,
     student: RawStudent
   ) => {
+    if (onLeaveStudioIds.has(studioId)) return;
     const assigned = assignedByStudio.get(studioId);
+    const coveringFor = coveringForByStudio.get(studioId);
     const mine =
       student.teacherUserId === userId ||
+      Boolean(
+        student.teacherUserId && coveringFor?.has(student.teacherUserId)
+      ) ||
       Boolean(assigned?.has(student.userId));
     if (!mine) return;
     const key = `${studioId}:${slotStart}`;

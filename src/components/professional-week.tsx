@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight, MapPin } from "lucide-react";
 import { toast } from "sonner";
 import { SiteHeader } from "@/components/site-header";
+import { TeacherLeavesSection } from "@/components/teacher-leaves-section";
 import { useAppStore } from "@/components/app-provider";
 import { useNow } from "@/components/use-now";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -28,8 +29,13 @@ import {
   monthLabel,
   sameLocalDay,
 } from "@/lib/agenda";
-import { formatBillingYmd, todayBillingYmd } from "@/lib/client-account";
 import {
+  formatBillingYmd,
+  shiftYmd,
+  todayBillingYmd,
+} from "@/lib/client-account";
+import {
+  listOwnTeacherLeaves,
   listTeacherClientAbsences,
   loadTeacherDayAgenda,
   loadTeacherStudioHours,
@@ -38,6 +44,7 @@ import {
   type TeacherDayAgenda,
   type TeacherDaySlot,
   type TeacherDaySlotStudent,
+  type TeacherLeaveView,
   type TeacherSlotAttendance,
   type TeacherStudioHours,
 } from "@/lib/studio";
@@ -82,6 +89,7 @@ export function ProfessionalWeek() {
   const [dayAgenda, setDayAgenda] = useState<TeacherDayAgenda | null>(null);
   const [todayAgenda, setTodayAgenda] = useState<TeacherDayAgenda | null>(null);
   const [absences, setAbsences] = useState<StudioAbsenceView[]>([]);
+  const [leaves, setLeaves] = useState<TeacherLeaveView[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [agendaError, setAgendaError] = useState("");
   const [selected, setSelected] = useState(() => localNoon(new Date()));
@@ -115,6 +123,13 @@ export function ProfessionalWeek() {
       })
       .catch(() => {
         if (!cancelled) setAbsences([]);
+      });
+    void listOwnTeacherLeaves()
+      .then((rows) => {
+        if (!cancelled) setLeaves(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setLeaves([]);
       });
     return () => {
       cancelled = true;
@@ -161,6 +176,22 @@ export function ProfessionalWeek() {
     }
     return set;
   }, [studioHours]);
+
+  const leaveByDay = useMemo(() => {
+    const map = new Map<string, TeacherLeaveView>();
+    for (const leave of leaves ?? []) {
+      let cursorYmd = leave.startsOn;
+      let guard = 0;
+      while (cursorYmd <= leave.endsOn && guard < 120) {
+        map.set(cursorYmd, leave);
+        cursorYmd = shiftYmd(cursorYmd, 1);
+        guard += 1;
+      }
+    }
+    return map;
+  }, [leaves]);
+
+  const selectedLeave = leaveByDay.get(selectedYmd) ?? null;
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -454,7 +485,9 @@ export function ProfessionalWeek() {
           </div>
           <div className="mt-1 grid grid-cols-7 gap-1">
             {cells.map((date) => {
+              const ymd = toYmd(date);
               const hasShift = shiftWeekdays.has(date.getDay());
+              const leave = leaveByDay.get(ymd);
               const selectedDay = sameLocalDay(date, selected);
               const isToday = sameLocalDay(date, today);
               const inMonth = date.getMonth() === month;
@@ -462,7 +495,7 @@ export function ProfessionalWeek() {
                 WEEKDAYS.find((item) => item.id === date.getDay())?.full,
                 date.getDate(),
                 isToday ? "hoy" : null,
-                hasShift ? "con turnos" : "libre",
+                leave ? "licencia" : hasShift ? "con turnos" : "libre",
               ]
                 .filter(Boolean)
                 .join(", ");
@@ -475,20 +508,33 @@ export function ProfessionalWeek() {
                   aria-pressed={selectedDay}
                   onClick={() => choose(date)}
                   className={cn(
-                    "flex min-h-12 flex-col items-center justify-center rounded-2xl py-1.5 text-sm transition-colors",
+                    "flex min-h-14 flex-col items-center justify-center rounded-2xl px-0.5 py-1.5 text-sm transition-colors",
                     !inMonth && "opacity-40",
-                    selectedDay
-                      ? "bg-primary text-primary-foreground"
-                      : isToday
-                        ? "bg-primary/12 text-foreground"
-                        : "hover:bg-muted"
+                    leave && !selectedDay
+                      ? "bg-amber-500/14 text-amber-950 dark:text-amber-100"
+                      : selectedDay
+                        ? "bg-primary text-primary-foreground"
+                        : isToday
+                          ? "bg-primary/12 text-foreground"
+                          : "hover:bg-muted"
                   )}
                 >
                   <span className="tabular-nums leading-none">
                     {date.getDate()}
                   </span>
-                  <span className="mt-1 flex h-3 items-center justify-center">
-                    {hasShift ? (
+                  <span
+                    className={cn(
+                      "mt-1 flex min-h-3 items-center justify-center text-[9px] font-medium leading-none tracking-wide uppercase",
+                      leave
+                        ? selectedDay
+                          ? "text-primary-foreground/90"
+                          : "text-amber-900 dark:text-amber-200"
+                        : "h-3"
+                    )}
+                  >
+                    {leave ? (
+                      "licencia"
+                    ) : hasShift ? (
                       <span
                         className={cn(
                           "size-1.5 rounded-full",
@@ -502,13 +548,30 @@ export function ProfessionalWeek() {
             })}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            El punto marca un día con sucursal. Tocá el día para ver los turnos
-            por hora.
+            El punto marca un día con sucursal. Los días de licencia aparecen
+            marcados. Tocá el día para ver el detalle.
           </p>
         </section>
 
+        <TeacherLeavesSection leaves={leaves} onLeavesChange={setLeaves} />
+
         <section className="mt-4 rounded-3xl border border-foreground/8 bg-card p-4 sm:p-5">
           <h2 className="font-heading text-2xl italic">{dayHeading(selected)}</h2>
+          {selectedLeave ? (
+            <div className="mt-3 rounded-2xl border border-amber-500/35 bg-amber-500/12 px-3 py-3">
+              <p className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                Licencia
+              </p>
+              <p className="mt-1 text-xs text-amber-950/80 dark:text-amber-50/80">
+                {selectedLeave.status === "pending"
+                  ? "Pedido pendiente de confirmación del gimnasio."
+                  : selectedLeave.replacementTeacherName
+                    ? `Confirmada · reemplazo: ${selectedLeave.replacementTeacherName}`
+                    : "Confirmada."}
+                {selectedLeave.note ? ` · ${selectedLeave.note}` : ""}
+              </p>
+            </div>
+          ) : null}
           {agendaError ? (
             <p className="mt-3 text-sm text-muted-foreground">{agendaError}</p>
           ) : dayAgenda === null ? (
@@ -516,7 +579,9 @@ export function ProfessionalWeek() {
               Cargando turnos…
             </p>
           ) : dayAgenda.slots.length === 0 ? (
-            <p className="mt-3 text-sm text-muted-foreground">Libre</p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              {selectedLeave ? "Sin clases ese día." : "Libre"}
+            </p>
           ) : (
             <>
               <ul className="mt-4 flex flex-col gap-2">

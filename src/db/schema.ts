@@ -400,3 +400,41 @@ export const studioShiftRequests = pgTable(
     index("studio_shift_requests_status_idx").on(table.status),
   ]
 );
+
+export type TeacherLeaveStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+/** Licencia del profesor (rango de días sin clases); el estudio confirma y elige reemplazo. */
+export const studioTeacherLeaves = pgTable(
+  "studio_teacher_leaves",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
+    teacherUserId: text("teacher_user_id").notNull(),
+    startsOn: text("starts_on").notNull(),
+    endsOn: text("ends_on").notNull(),
+    status: text("status")
+      .$type<TeacherLeaveStatus>()
+      .notNull()
+      .default("pending"),
+    replacementTeacherUserId: text("replacement_teacher_user_id"),
+    note: text("note").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("studio_teacher_leaves_owner_idx").on(table.ownerUserId),
+    index("studio_teacher_leaves_teacher_idx").on(table.teacherUserId),
+    index("studio_teacher_leaves_status_idx").on(table.status),
+    index("studio_teacher_leaves_range_idx").on(
+      table.ownerUserId,
+      table.startsOn,
+      table.endsOn
+    ),
+  ]
+);

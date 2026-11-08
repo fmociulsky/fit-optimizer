@@ -230,7 +230,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
                     icon={Building2}
                     onNavigate={() => setOpen(false)}
                   >
-                    Estudio
+                    Sucursales
                   </MenuLink>
                   <MenuLink
                     href="/estudio/profesores"

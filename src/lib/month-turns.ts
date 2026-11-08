@@ -5,6 +5,7 @@ import {
   studioMemberships,
   studioMonthTurns,
   studioReservations,
+  studioTeacherLeaves,
   studios,
 } from "@/db/schema";
 import {
@@ -128,30 +129,70 @@ export async function syncFixedMonthTurns(
         eq(studioMemberships.role, "client")
       );
 
-  const [reservations, existing, absences, members] = await Promise.all([
-    db.select().from(studioReservations).where(reservationWhere),
-    db.select().from(studioMonthTurns).where(turnWhere),
-    db
-      .select({
-        clientUserId: studioAbsences.clientUserId,
-        absentOn: studioAbsences.absentOn,
-      })
-      .from(studioAbsences)
-      .where(absenceWhere),
-    db
-      .select({
-        userId: studioMemberships.userId,
-        paymentStatus: studioMemberships.paymentStatus,
-      })
-      .from(studioMemberships)
-      .where(memberWhere),
-  ]);
+  const [reservations, existing, absences, members, studioRow] =
+    await Promise.all([
+      db.select().from(studioReservations).where(reservationWhere),
+      db.select().from(studioMonthTurns).where(turnWhere),
+      db
+        .select({
+          clientUserId: studioAbsences.clientUserId,
+          absentOn: studioAbsences.absentOn,
+        })
+        .from(studioAbsences)
+        .where(absenceWhere),
+      db
+        .select({
+          userId: studioMemberships.userId,
+          paymentStatus: studioMemberships.paymentStatus,
+        })
+        .from(studioMemberships)
+        .where(memberWhere),
+      db
+        .select({ ownerUserId: studios.ownerUserId })
+        .from(studios)
+        .where(eq(studios.id, studioId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+    ]);
+
+  const leaves = studioRow
+    ? await db
+        .select({
+          teacherUserId: studioTeacherLeaves.teacherUserId,
+          replacementTeacherUserId:
+            studioTeacherLeaves.replacementTeacherUserId,
+          startsOn: studioTeacherLeaves.startsOn,
+          endsOn: studioTeacherLeaves.endsOn,
+        })
+        .from(studioTeacherLeaves)
+        .where(
+          and(
+            eq(studioTeacherLeaves.ownerUserId, studioRow.ownerUserId),
+            eq(studioTeacherLeaves.status, "approved"),
+            lte(studioTeacherLeaves.startsOn, to),
+            gte(studioTeacherLeaves.endsOn, from)
+          )
+        )
+    : [];
 
   const pausedClientIds = new Set(
     members
       .filter((item) => item.paymentStatus === "paused")
       .map((item) => item.userId)
   );
+  const teacherCoverByDay = new Map<string, string>();
+  for (const leave of leaves) {
+    if (!leave.replacementTeacherUserId) continue;
+    let cursor = leave.startsOn < from ? from : leave.startsOn;
+    const last = leave.endsOn > to ? to : leave.endsOn;
+    while (cursor <= last) {
+      teacherCoverByDay.set(
+        `${cursor}|${leave.teacherUserId}`,
+        leave.replacementTeacherUserId
+      );
+      cursor = shiftYmd(cursor, 1);
+    }
+  }
 
   const absentKeys = new Set(
     absences.map((row) => `${row.clientUserId}|${row.absentOn}`)
@@ -188,6 +229,10 @@ export async function syncFixedMonthTurns(
         ? "absent"
         : "scheduled";
       const current = existingByKey.get(key);
+      const coveredTeacher = reservation.teacherUserId
+        ? (teacherCoverByDay.get(`${ymd}|${reservation.teacherUserId}`) ??
+          reservation.teacherUserId)
+        : reservation.teacherUserId;
       if (!current) {
         if (ymd < today && clientsWithPast.has(reservation.clientUserId)) {
           continue;
@@ -199,7 +244,7 @@ export async function syncFixedMonthTurns(
           occursOn: ymd,
           weekday,
           slotStart: reservation.slotStart,
-          teacherUserId: reservation.teacherUserId,
+          teacherUserId: coveredTeacher,
           source: "fixed",
           status,
         });
@@ -208,9 +253,7 @@ export async function syncFixedMonthTurns(
       if (current.source !== "fixed") continue;
       const frozen = ymd < today;
       const nextSlot = frozen ? current.slotStart : reservation.slotStart;
-      const nextTeacher = frozen
-        ? current.teacherUserId
-        : reservation.teacherUserId;
+      const nextTeacher = frozen ? current.teacherUserId : coveredTeacher;
       const nextWeekday = frozen ? current.weekday : weekday;
       if (
         current.status !== status ||

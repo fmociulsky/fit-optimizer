@@ -472,7 +472,7 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
               <>
                 {/* Celular: un día a la vez */}
                 <div className="mt-4 md:hidden">
-                  <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <div className="grid grid-cols-7 gap-1">
                     {days.map((day) => {
                       const label =
                         WEEKDAYS.find((item) => item.id === day.weekday)
@@ -485,7 +485,7 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
                           type="button"
                           onClick={() => setSelectedDay(day.occursOn)}
                           className={cn(
-                            "flex min-w-[3.25rem] shrink-0 flex-col items-center rounded-2xl px-2.5 py-2 transition-colors",
+                            "flex flex-col items-center rounded-xl px-0.5 py-2 transition-colors",
                             selected
                               ? "bg-primary text-primary-foreground"
                               : isToday
@@ -493,10 +493,10 @@ export function StudioWeekAgenda({ studioId }: { studioId: string }) {
                                 : "bg-muted/60 text-foreground hover:bg-muted"
                           )}
                         >
-                          <span className="text-[11px] font-medium tracking-wide uppercase opacity-80">
+                          <span className="text-[10px] font-medium tracking-wide uppercase opacity-80">
                             {label}
                           </span>
-                          <span className="text-base font-semibold tabular-nums">
+                          <span className="text-sm font-semibold tabular-nums">
                             {Number(day.occursOn.slice(8))}
                           </span>
                         </button>

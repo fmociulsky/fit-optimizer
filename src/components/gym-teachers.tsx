@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Phone } from "lucide-react";
 import { toast } from "sonner";
 import { BackLink } from "@/components/back-link";
+import { GymTeacherLeavesPanel } from "@/components/gym-teacher-leaves";
 import { SearchCreateBar } from "@/components/search-create-bar";
 import { SiteHeader } from "@/components/site-header";
 import { TeacherStudentAssign } from "@/components/studio-assign";
@@ -147,6 +148,7 @@ export function GymTeachersView() {
             horarios, alumnos o darlo de baja.
           </p>
         </div>
+        <GymTeacherLeavesPanel />
         <SearchCreateBar
           query={query}
           onQueryChange={setQuery}
