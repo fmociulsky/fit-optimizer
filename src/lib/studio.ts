@@ -1420,7 +1420,7 @@ export async function annulStudentTurn(
       .delete(studioMonthTurns)
       .where(eq(studioMonthTurns.id, turn.id));
     await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
-    return;
+    return loadWeekAgenda(studio.id, mondayOfYmd(ymd));
   }
   const prior = await db
     .select({
@@ -1460,6 +1460,7 @@ export async function annulStudentTurn(
     .set({ status: "absent" })
     .where(eq(studioMonthTurns.id, turn.id));
   await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
+  return loadWeekAgenda(studio.id, mondayOfYmd(ymd));
 }
 
 /** El estudio saca a un alumno de la lista de espera. El crédito vuelve a quedar libre. */
@@ -1493,6 +1494,7 @@ export async function removeStudentFromWaitlist(
     .limit(1);
   if (!row) throw new Error("Ese alumno no está en la lista de espera.");
   await db.delete(studioWaitlist).where(eq(studioWaitlist.id, row.id));
+  return loadWeekAgenda(studio.id, mondayOfYmd(ymd));
 }
 
 /** El estudio anota a un alumno con crédito: en el turno si hay lugar, si no en la espera. */
@@ -1691,7 +1693,7 @@ export async function enrollStudentWithCredit(
       });
     }
     await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
-    return;
+    return loadWeekAgenda(studio.id, mondayOfYmd(ymd));
   }
   await db.insert(studioWaitlist).values({
     id: uid(),
@@ -1702,6 +1704,7 @@ export async function enrollStudentWithCredit(
     slotStart: hour,
   });
   await fillWaitlist(studio.id, { occursOn: ymd, slotStart: hour });
+  return loadWeekAgenda(studio.id, mondayOfYmd(ymd));
 }
 
 export type OwnedBranchQuota = {
