@@ -28,7 +28,7 @@ const newsreader = Newsreader({
 export const metadata: Metadata = {
   title: "Enforma — gimnasio, profesores y alumnos",
   description:
-    "Administra un gimnasio: profesores, alumnos, horarios y cupo. Cada alumno elige el día dentro del horario de su sucursal.",
+    "Agenda, cupos, planes de entrenamiento y cuentas para estudios, profesores y alumnos. Sin planillas.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

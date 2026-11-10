@@ -90,6 +90,14 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
           <span className="font-heading text-lg italic">Enforma</span>
         </Link>
         <div className="ml-auto flex items-center gap-2">
+          {!account && pathname !== "/acceder" ? (
+            <Button
+              render={<Link href="/acceder" />}
+              className="h-9 px-4"
+            >
+              Acceder
+            </Button>
+          ) : null}
           <Show when="signed-in">
             <UserButton />
           </Show>
